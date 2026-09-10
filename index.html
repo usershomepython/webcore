@@ -1,410 +1,116 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>CYBER HANDS // NEON TRACKING</title>
-  
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
-    }
-
-    body {
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    #canvas {
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-    }
-
-    /* Подсказки по жестам на экране */
-    #hud {
-      position: absolute;
-      top: 15px;
-      left: 15px;
-      color: #00ffcc;
-      background: rgba(5, 5, 15, 0.8);
-      padding: 10px 16px;
-      border: 1px solid #00ffcc;
-      border-radius: 8px;
-      font-size: 13px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      box-shadow: 0 0 15px rgba(0, 255, 204, 0.3);
-      pointer-events: none;
-      z-index: 10;
-      line-height: 1.5;
-    }
-
-    #hud span {
-      color: #ff00ff;
-      font-weight: bold;
-    }
-
-    #video {
-      display: none;
-    }
-  </style>
-
-  <!-- Быстрый CDN MediaPipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<meta charset="UTF-8">
+<title>RetroLens</title>
+<style>
+  body{margin:0;background:#111;color:#0f0;font-family:monospace;display:flex;flex-direction:column;align-items:center}
+  #wrap{position:relative}
+  video{display:none}
+  canvas{max-width:100%;border:2px solid #0f0}
+  #hud{padding:6px;text-align:center}
+  #hud b{color:#ff0}
+</style>
 </head>
-
 <body>
-  <div id="hud">
-    🖐 <span>РАСКРОЙ ЛАДОНЬ:</span> Энерго-щит<br>
-    👌 <span>СОМКНИ ПАЛЬЦЫ:</span> Спавн 3D-фигур<br>
-    ☝️ <span>ДВИГАЙ ПАЛЬЦЕМ:</span> Неоновый след
-  </div>
+<div id="hud">Фильтр: <b id="fname">normal</b> | Большой палец касается кончика пальца → фильтр</div>
+<div id="wrap">
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+</div>
 
-  <video id="video" playsinline autoplay muted></video>
-  <canvas id="canvas"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const fname = document.getElementById('fname');
 
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const hud = document.getElementById('hud');
+const filters = ['normal','invert','thermal','sketch','pixelate','red-channel','cartoon'];
+let fi = 0;
+let lastSwitch = 0;
 
-    let handsData = [];
-    let isProcessing = false;
-    let trailPoints = []; // Точки для светового следа пальца
-    let shapeRotation = 0; // Угол вращения фигур
+// Кончики пальцев: 4=большой,8=указательный,12=средний,16=безымянный,20=мизинец
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
-    // Цвета для суставов пальцев
-    const FINGER_COLORS = [
-      '#00f0ff', // Большой (Cyan)
-      '#ff0077', // Указательный (Neon Pink)
-      '#ffe600', // Средний (Yellow)
-      '#00ff66', // Безымянный (Green)
-      '#b026ff'  // Мизинец (Purple)
-    ];
+// Возвращает индекс пальца (8/12/16/20), которого коснулся большой палец, либо null
+function touchedFinger(lm){
+  const thumb = lm[4];
+  const tips = [8,12,16,20];
+  for(const t of tips){
+    if(dist(thumb, lm[t]) < 0.05) return t; // порог касания
+  }
+  return null;
+}
 
-    // Связи фаланг кисти (скелет руки)
-    const HAND_CONNECTIONS = [
-      [0,1],[1,2],[2,3],[3,4],           // Большой
-      [0,5],[5,6],[6,7],[7,8],           // Указательный
-      [5,9],[9,10],[10,11],[11,12],      // Средний
-      [9,13],[13,14],[14,15],[15,16],    // Безымянный
-      [13,17],[17,18],[18,19],[19,20],  // Мизинец
-      [0,17]                             // Ладонь
-    ];
-
-    /* -------------------------------------------------------------
-       1. ПОДКЛЮЧЕНИЕ ФРОНТАЛЬНОЙ КАМЕРЫ
-       ------------------------------------------------------------- */
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-            width: { ideal: 960 },
-            height: { ideal: 540 }
-          },
-          audio: false
-        });
-
-        video.srcObject = stream;
-        await new Promise(r => video.onloadedmetadata = r);
-        video.play();
-
-        canvas.width = video.videoWidth || 960;
-        canvas.height = video.videoHeight || 540;
-
-        initHands();
-        requestAnimationFrame(renderLoop);
-      } catch (e) {
-        hud.innerHTML = `<span style="color:red">ОШИБКА КАМЕРЫ: ${e.message}</span>`;
+function applyFilter(name){
+  const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d = img.data;
+  if(name==='invert'){
+    for(let i=0;i<d.length;i+=4){d[i]=255-d[i];d[i+1]=255-d[i+1];d[i+2]=255-d[i+2];}
+  } else if(name==='thermal'){
+    for(let i=0;i<d.length;i+=4){
+      const g=(d[i]+d[i+1]+d[i+2])/3;
+      d[i]=Math.min(255,g*2); d[i+1]=g; d[i+2]=255-g;
+    }
+  } else if(name==='sketch'){
+    for(let i=0;i<d.length;i+=4){
+      const g=255-((d[i]+d[i+1]+d[i+2])/3);
+      d[i]=d[i+1]=d[i+2]=g;
+    }
+  } else if(name==='red-channel'){
+    for(let i=0;i<d.length;i+=4){d[i+1]=0;d[i+2]=0;}
+  } else if(name==='cartoon'){
+    for(let i=0;i<d.length;i+=4){
+      d[i]=Math.round(d[i]/60)*60;
+      d[i+1]=Math.round(d[i+1]/60)*60;
+      d[i+2]=Math.round(d[i+2]/60)*60;
+    }
+  }
+  if(name!=='pixelate') ctx.putImageData(img,0,0);
+  if(name==='pixelate'){
+    const size=16;
+    for(let y=0;y<canvas.height;y+=size){
+      for(let x=0;x<canvas.width;x+=size){
+        const p = ctx.getImageData(x,y,1,1).data;
+        ctx.fillStyle=`rgb(${p[0]},${p[1]},${p[2]})`;
+        ctx.fillRect(x,y,size,size);
       }
     }
+  }
+}
 
-    /* -------------------------------------------------------------
-       2. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE HANDS
-       ------------------------------------------------------------- */
-    function initHands() {
-      const hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-      });
+const hands = new Hands({locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+hands.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:0.6,minTrackingConfidence:0.6});
+hands.onResults(onResults);
 
-      hands.setOptions({
-        maxNumHands: 2,              // Трекинг обеих рук одновременно
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+function onResults(res){
+  ctx.save();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
 
-      hands.onResults((results) => {
-        handsData = results.multiHandLandmarks || [];
-      });
-
-      // Плавный цикл отправки кадров
-      async function step() {
-        if (video.readyState >= 2 && !isProcessing) {
-          isProcessing = true;
-          try {
-            await hands.send({ image: video });
-          } catch(err) {}
-          isProcessing = false;
-        }
-        setTimeout(step, 20); // ~50 FPS
-      }
-      step();
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
+    const lm = res.multiHandLandmarks[0];
+    const now = Date.now();
+    const t = touchedFinger(lm);
+    if(t && now-lastSwitch>600){
+      // указательный->invert, средний->thermal, безымянный->sketch, мизинец->pixelate
+      const map = {8:1, 12:2, 16:3, 20:4};
+      fi = map[t] ?? fi;
+      lastSwitch = now;
     }
+  }
+  applyFilter(filters[fi]);
+  fname.textContent = filters[fi];
+  ctx.restore();
+}
 
-    /* -------------------------------------------------------------
-       3. ФИГУРА 1: ВРАЩАЮЩИЙСЯ КРИСТАЛЛ / КУБ (ПРИ ЩИПКЕ)
-       ------------------------------------------------------------- */
-    function drawPinchGeometry(x, y, scale = 1) {
-      shapeRotation += 0.04;
-      const size = 45 * scale;
-      const time = Date.now() * 0.003;
-
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(shapeRotation);
-
-      // Внешний светящийся ромб
-      ctx.strokeStyle = `hsl(${(time * 60) % 360}, 100%, 65%)`;
-      ctx.lineWidth = 3;
-      ctx.shadowColor = ctx.strokeStyle;
-      ctx.shadowBlur = 15;
-
-      ctx.beginPath();
-      ctx.moveTo(0, -size);
-      ctx.lineTo(size, 0);
-      ctx.lineTo(0, size);
-      ctx.lineTo(-size, 0);
-      ctx.closePath();
-      ctx.stroke();
-
-      // Внутренний вращающийся треугольник
-      ctx.rotate(-shapeRotation * 2);
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      for (let i = 0; i < 3; i++) {
-        const angle = (i * 2 * Math.PI) / 3;
-        const tx = Math.cos(angle) * (size * 0.55);
-        const ty = Math.sin(angle) * (size * 0.55);
-        if (i === 0) ctx.moveTo(tx, ty);
-        else ctx.lineTo(tx, ty);
-      }
-      ctx.closePath();
-      ctx.stroke();
-
-      // Ядро энергии в центре
-      ctx.fillStyle = '#00ffff';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6 * scale, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    /* -------------------------------------------------------------
-       4. ФИГУРА 2: ЭНЕРГО-ЩИТ (ПРИ РАСКРЫТОЙ ЛАДОНИ)
-       ------------------------------------------------------------- */
-    function drawEnergyShield(cx, cy, radius) {
-      const time = Date.now() * 0.002;
-      ctx.save();
-      ctx.translate(cx, cy);
-
-      // 1. Внешний круг щита
-      ctx.strokeStyle = 'rgba(255, 0, 128, 0.8)';
-      ctx.lineWidth = 3;
-      ctx.shadowColor = '#ff007f';
-      ctx.shadowBlur = 20;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // 2. Вращающееся кольцо рун/сегментов
-      ctx.rotate(time);
-      ctx.strokeStyle = 'rgba(0, 255, 204, 0.7)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 12]);
-      ctx.beginPath();
-      ctx.arc(0, 0, radius * 0.8, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 3. Звезда / Гексаграмма в центре
-      ctx.rotate(-time * 1.8);
-      ctx.strokeStyle = '#ffffff';
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (i * Math.PI) / 3;
-        const r = i % 2 === 0 ? radius * 0.65 : radius * 0.35;
-        const px = Math.cos(a) * r;
-        const py = Math.sin(a) * r;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.stroke();
-
-      ctx.restore();
-    }
-
-    /* -------------------------------------------------------------
-       5. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА НА CANVAS
-       ------------------------------------------------------------- */
-    function renderLoop() {
-      const w = canvas.width;
-      const h = canvas.height;
-
-      if (video.readyState >= 2) {
-        ctx.save();
-
-        // 1. Зеркальное отображение видео с камеры
-        ctx.translate(w, 0);
-        ctx.scale(-1, 1);
-        // Рисуем слегка затемненное видео, чтобы неон горел ярче
-        ctx.drawImage(video, 0, 0, w, h);
-        ctx.fillStyle = 'rgba(0, 0, 10, 0.35)';
-        ctx.fillRect(0, 0, w, h);
-
-        ctx.restore();
-
-        // Массив кончиков указательных пальцев (для молнии между 2 руками)
-        const indexTips = [];
-
-        // 2. ОБРАБОТКА И ТРЕКИНГ РУК
-        if (handsData.length > 0) {
-          handsData.forEach((landmarks) => {
-            // Координаты с учетом зеркалирования
-            const pts = landmarks.map(p => ({
-              x: (1 - p.x) * w,
-              y: p.y * h
-            }));
-
-            // --- А) РИСУЕМ НЕОНОВЫЙ КИБЕР-СКЕЛЕТ РУКИ ---
-            ctx.lineWidth = 3;
-            ctx.shadowBlur = 10;
-
-            HAND_CONNECTIONS.forEach(([i, j]) => {
-              const grad = ctx.createLinearGradient(pts[i].x, pts[i].y, pts[j].x, pts[j].y);
-              grad.addColorStop(0, '#00f0ff');
-              grad.addColorStop(1, '#ff0077');
-              ctx.strokeStyle = grad;
-              ctx.shadowColor = '#00f0ff';
-
-              ctx.beginPath();
-              ctx.moveTo(pts[i].x, pts[i].y);
-              ctx.lineTo(pts[j].x, pts[j].y);
-              ctx.stroke();
-            });
-
-            // --- Б) РИСУЕМ СВЕТЯЩИЕСЯ СУСТАВЫ ---
-            pts.forEach((pt, idx) => {
-              const isTip = [4, 8, 12, 16, 20].includes(idx);
-              ctx.fillStyle = isTip ? '#ffffff' : '#00ffcc';
-              ctx.shadowColor = isTip ? '#ff0077' : '#00ffcc';
-              ctx.shadowBlur = isTip ? 16 : 8;
-
-              ctx.beginPath();
-              ctx.arc(pt.x, pt.y, isTip ? 6 : 4, 0, Math.PI * 2);
-              ctx.fill();
-            });
-
-            // Сохраняем кончик указательного пальца (8)
-            indexTips.push(pts[8]);
-
-            // Добавляем след от указательного пальца
-            trailPoints.push({
-              x: pts[8].x,
-              y: pts[8].y,
-              life: 1.0,
-              hue: (Date.now() * 0.2) % 360
-            });
-
-            // --- В) ЖЕСТ 1: ЩИПОК (БОЛЬШОЙ + УКАЗАТЕЛЬНЫЙ) ---
-            const pinchDist = Math.hypot(pts[4].x - pts[8].x, pts[4].y - pts[8].y);
-            if (pinchDist < 45) {
-              const midX = (pts[4].x + pts[8].x) / 2;
-              const midY = (pts[4].y + pts[8].y) / 2;
-              drawPinchGeometry(midX, midY, (50 - pinchDist) / 30 + 0.8);
-            }
-
-            // --- Г) ЖЕСТ 2: РАСКРЫТАЯ ЛАДОНЬ (ЭНЕРГО-ЩИТ) ---
-            // Сравниваем расстояние от кончиков до основания ладони (0)
-            const palmCenter = {
-              x: (pts[0].x + pts[9].x) / 2,
-              y: (pts[0].y + pts[9].y) / 2
-            };
-            const palmDist = Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y);
-            const isOpenPalm = [8, 12, 16, 20].every(tipId => {
-              return Math.hypot(pts[tipId].x - pts[0].x, pts[tipId].y - pts[0].y) > palmDist * 1.5;
-            });
-
-            if (isOpenPalm && pinchDist >= 45) {
-              drawEnergyShield(palmCenter.x, palmCenter.y, palmDist * 1.2);
-            }
-          });
-
-          // --- Д) МОЛНИЯ МЕЖДУ ДВУМЯ РУКАМИ ---
-          if (indexTips.length === 2) {
-            ctx.save();
-            ctx.strokeStyle = '#00ffff';
-            ctx.lineWidth = 3;
-            ctx.shadowColor = '#00ffff';
-            ctx.shadowBlur = 18;
-
-            ctx.beginPath();
-            ctx.moveTo(indexTips[0].x, indexTips[0].y);
-
-            // Зигзаг электрического разряда
-            const steps = 8;
-            for (let s = 1; s < steps; s++) {
-              const t = s / steps;
-              const lx = indexTips[0].x + (indexTips[1].x - indexTips[0].x) * t;
-              const ly = indexTips[0].y + (indexTips[1].y - indexTips[0].y) * t;
-              const jitter = (Math.random() - 0.5) * 35;
-              ctx.lineTo(lx + jitter, ly + jitter);
-            }
-
-            ctx.lineTo(indexTips[1].x, indexTips[1].y);
-            ctx.stroke();
-            ctx.restore();
-          }
-        }
-
-        // 3. ОТРИСОВКА СВЕТОВОГО СЛЕДА (AIR DRAWING)
-        for (let i = trailPoints.length - 1; i >= 0; i--) {
-          const tp = trailPoints[i];
-          tp.life -= 0.025; // Скорость угасания
-
-          if (tp.life <= 0) {
-            trailPoints.splice(i, 1);
-            continue;
-          }
-
-          ctx.fillStyle = `hsla(${tp.hue}, 100%, 60%, ${tp.life})`;
-          ctx.shadowColor = `hsl(${tp.hue}, 100%, 60%)`;
-          ctx.shadowBlur = 12;
-
-          ctx.beginPath();
-          ctx.arc(tp.x, tp.y, 8 * tp.life, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      requestAnimationFrame(renderLoop);
-    }
-
-    window.addEventListener('DOMContentLoaded', startCamera);
-  </script>
+const camera = new Camera(video, {
+  onFrame: async ()=>{ await hands.send({image: video}); },
+  width:640, height:480
+});
+camera.start();
+</script>
 </body>
 </html>
