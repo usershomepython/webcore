@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>BREAKCORE // DATAMOSH GLITCH</title>
+  <title>WEBCORE // REAL TRACKING</title>
   
   <style>
     * {
@@ -22,13 +22,27 @@
       justify-content: center;
     }
 
-    /* Холст на весь экран */
     #glitch_canvas {
       width: 100vw;
       height: 100vh;
       object-fit: cover;
-      /* Повышенный контраст и насыщенность как в старых пережатых видео */
-      filter: contrast(160%) saturate(180%) brightness(90%);
+      filter: contrast(130%) saturate(160%);
+    }
+
+    /* Информационный оверлей для проверки работы трекинга */
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      font-family: monospace;
+      font-size: 14px;
+      font-weight: bold;
+      color: #ff0055;
+      background: rgba(0, 0, 0, 0.75);
+      padding: 6px 12px;
+      border: 1px solid #d946ef;
+      z-index: 100;
+      pointer-events: none;
     }
 
     #video_source {
@@ -36,11 +50,13 @@
     }
   </style>
 
-  <!-- MediaPipe Face Mesh CDN -->
+  <!-- CDN MediaPipe Face Mesh & Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
+  <div id="hud">STATUS: INITIALIZING...</div>
   <video id="video_source" playsinline></video>
   <canvas id="glitch_canvas"></canvas>
 
@@ -48,31 +64,20 @@
     const video = document.getElementById('video_source');
     const canvas = document.getElementById('glitch_canvas');
     const ctx = canvas.getContext('2d');
+    const hud = document.getElementById('hud');
 
-    let currentLandmarks = null;
-    let isProcessing = false;
-
-    // Массив фиолетовых блоков, которые живут своей жизнью (как артефакты в видео)
-    const persistentBoxes = [];
-    for (let i = 0; i < 18; i++) {
-      persistentBoxes.push({
-        x: Math.random(),
-        y: Math.random(),
-        w: Math.random() * 0.25 + 0.05,
-        h: Math.random() * 0.35 + 0.08,
-        life: Math.floor(Math.random() * 20),
-        color: Math.random() > 0.3 ? 'rgba(147, 20, 180, 0.88)' : 'rgba(85, 0, 120, 0.92)'
-      });
-    }
+    let detectedFaces = [];
+    let isTrackingBusy = false;
 
     /* -------------------------------------------------------------
-       1. ПОДКЛЮЧЕНИЕ ОСНОВНОЙ КАМЕРЫ
+       1. СТАБИЛЬНЫЙ ЗАПУСК ОСНОВНОЙ КАМЕРЫ
        ------------------------------------------------------------- */
     async function startCamera() {
+      hud.innerText = "STATUS: REQUESTING REAR CAMERA...";
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: "environment" }, // Основная задняя камера
+            facingMode: { ideal: "environment" },
             width: { ideal: 1280 },
             height: { ideal: 720 }
           },
@@ -80,161 +85,177 @@
         });
 
         video.srcObject = stream;
-        await video.play();
+        
+        // Ждем обязательной готовности метаданных видео
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            resolve();
+          };
+        });
 
         canvas.width = video.videoWidth || 1280;
         canvas.height = video.videoHeight || 720;
 
-        // Запуск параллельного рендеринга
+        hud.innerText = "STATUS: CAMERA READY, LOADING MODEL...";
+        initFaceMesh();
         requestAnimationFrame(renderLoop);
-        initMediaPipe();
-      } catch (e) {
-        console.error("Ошибка камеры:", e);
+      } catch (err) {
+        console.error("Camera Error:", err);
+        hud.innerText = `CAMERA ERROR: ${err.message}`;
+        hud.style.color = "red";
       }
     }
 
     /* -------------------------------------------------------------
-       2. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE FACE MESH
+       2. ИНИЦИАЛИЗАЦИЯ И ОБРАБОТКА MEDIAPIPE FACE MESH
        ------------------------------------------------------------- */
-    function initMediaPipe() {
+    function initFaceMesh() {
       const faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
 
       faceMesh.setOptions({
         maxNumFaces: 2,
-        refineLandmarks: false,
-        minDetectionConfidence: 0.4,
-        minTrackingConfidence: 0.4
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
       });
 
       faceMesh.onResults((results) => {
         if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          currentLandmarks = results.multiFaceLandmarks;
+          detectedFaces = results.multiFaceLandmarks;
+          hud.innerText = `TRACKING ACTIVE // FACES: ${detectedFaces.length}`;
+          hud.style.color = "#00ff66";
         } else {
-          currentLandmarks = null;
+          detectedFaces = [];
+          hud.innerText = "TRACKING ACTIVE // NO FACE IN FRAME";
+          hud.style.color = "#d946ef";
         }
       });
 
-      // Передача кадров в FaceMesh
-      async function track() {
-        if (video.readyState >= 2 && !isProcessing) {
-          isProcessing = true;
-          await faceMesh.send({ image: video });
-          isProcessing = false;
+      // Безопасный цикл трекинга кадров без утечек и зависаний
+      async function sendFrame() {
+        if (video.readyState >= 2 && !isTrackingBusy) {
+          isTrackingBusy = true;
+          try {
+            await faceMesh.send({ image: video });
+          } catch (e) {
+            console.error("Tracking Frame Error:", e);
+          } finally {
+            isTrackingBusy = false;
+          }
         }
-        setTimeout(track, 30); // ~30 FPS для детекции
+        // Запрос детекции 30 раз в секунду
+        setTimeout(sendFrame, 33);
       }
-      track();
+
+      sendFrame();
     }
 
     /* -------------------------------------------------------------
-       3. ГЕНЕРАТОР ГЛИТЧ-КВАДРАТИКОВ (ИЗ ВИДЕО)
+       3. ФУНКЦИЯ ОТРИСОВКИ ТРЕКИНГ-БЛОКА НА ТОЧКЕ ЛИЦА
        ------------------------------------------------------------- */
-    function drawGlitchBox(x, y, w, h, fill = 'rgba(160, 20, 200, 0.85)') {
-      // 1. Фиолетовая плашка артефакта
-      ctx.fillStyle = fill;
-      ctx.fillRect(x, y, w, h);
+    function drawGlitchBlock(x, y, w, h) {
+      // 1. Фиолетовая заливка (ядовито-пурпурная, как в видео)
+      ctx.fillStyle = 'rgba(168, 15, 200, 0.85)';
+      ctx.fillRect(x - w / 2, y - h / 2, w, h);
 
-      // 2. Тонкая белая рамка
+      // 2. Белая рамка сжатия
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(x, y, w, h);
+      ctx.strokeRect(x - w / 2, y - h / 2, w, h);
 
-      // 3. Внутренний дополнительный прямоугольник (эффект макроблока сжатия)
-      if (w > 40 && Math.random() < 0.4) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-        ctx.strokeRect(x + 4, y + 4, w - 8, h - 8);
+      // 3. Внутренняя рамка макроблока
+      if (w > 30) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.strokeRect(x - w / 2 + 3, y - h / 2 + 3, w - 6, h - 6);
       }
     }
 
     /* -------------------------------------------------------------
-       4. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА (BLUR, COLORING, GLITCH)
+       4. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА НА CANVAS
        ------------------------------------------------------------- */
     function renderLoop() {
       const w = canvas.width;
       const h = canvas.height;
 
       if (video.readyState >= 2) {
-        // --- ЭФФЕКТ MOTION BLUR / ШЛЕЙФА (GHOSTING) ---
-        // Рисуем текущий кадр с лёгкой прозрачностью поверх предыдущего
-        ctx.globalAlpha = 0.72; // Чем меньше число, тем сильнее блюр и шлейф
+        // --- ЭФФЕКТ ШЛЕЙФА / БЛЮРА (MOTION BLUR) ---
+        ctx.globalAlpha = 0.75;
         ctx.drawImage(video, 0, 0, w, h);
         ctx.globalAlpha = 1.0;
 
-        // --- ФИОЛЕТОВОЕ ОКРАШИВАНИЕ (COLOR TINT / THRESHOLD) ---
-        // Накладываем глубокий пурпурно-фиолетовый слой в режиме наложения
+        // --- ОКРАШИВАНИЕ В ФИОЛЕТОВЫЙ (WEBCORE COLOR TINT) ---
         ctx.save();
         ctx.globalCompositeOperation = 'color';
-        ctx.fillStyle = 'rgba(162, 28, 210, 0.45)';
+        ctx.fillStyle = 'rgba(147, 51, 234, 0.5)';
         ctx.fillRect(0, 0, w, h);
         ctx.restore();
 
-        // Дополнительный контрастный фиолетовый слой на темные зоны
-        if (Math.random() < 0.3) {
-          ctx.save();
-          ctx.globalCompositeOperation = 'exclusion';
-          ctx.fillStyle = 'rgba(75, 0, 130, 0.25)';
-          ctx.fillRect(0, 0, w, h);
-          ctx.restore();
-        }
+        // --- СТРОГИЙ ТРЕКИНГ КВАДРАТОВ ПО ЛИЦУ ---
+        // Рисуется ТОЛЬКО тогда, когда нейросеть реально держит лицо
+        if (detectedFaces.length > 0) {
+          for (const landmarks of detectedFaces) {
+            /* Ключевые точки лица:
+               33: Левый глаз
+               263: Правый глаз
+               168: Переносица
+               13: Верхняя губа
+               14: Нижняя губа
+               10: Верхняя граница лба
+               152: Подбородок
+               234, 454: Левая и правая скулы */
+            
+            // Расстояние между глазами для масштаба квадратиков
+            const eyeDist = Math.hypot(
+              (landmarks[263].x - landmarks[33].x) * w,
+              (landmarks[263].y - landmarks[33].y) * h
+            );
 
-        // --- 1. ТРЕКИНГ КВАДРАТИКОВ НА ЛИЦЕ (ЕСЛИ ОНО В КАДРЕ) ---
-        if (currentLandmarks) {
-          for (const face of currentLandmarks) {
-            // Ключевые точки: глаза (33, 263), рот (13), нос (4), лоб (10), щеки (234, 454)
-            const pts = [33, 263, 13, 4, 10, 234, 454, 152];
-            pts.forEach((idx) => {
-              if (Math.random() < 0.8) {
-                const pt = face[idx];
-                const bx = pt.x * w - 35 + (Math.random() - 0.5) * 40;
-                const by = pt.y * h - 45 + (Math.random() - 0.5) * 40;
-                const bw = Math.floor(Math.random() * 90) + 40;
-                const bh = Math.floor(Math.random() * 110) + 50;
+            // 1. Блок на левом глазу
+            const leftEye = landmarks[33];
+            drawGlitchBlock(leftEye.x * w, leftEye.y * h, eyeDist * 0.7, eyeDist * 0.5);
 
-                drawGlitchBox(bx, by, bw, bh, 'rgba(192, 38, 211, 0.88)');
-              }
+            // 2. Блок на правом глазу
+            const rightEye = landmarks[263];
+            drawGlitchBlock(rightEye.x * w, rightEye.y * h, eyeDist * 0.7, eyeDist * 0.5);
+
+            // 3. Блок на рту
+            const mouth = landmarks[13];
+            drawGlitchBlock(mouth.x * w, mouth.y * h, eyeDist * 0.9, eyeDist * 0.45);
+
+            // 4. Большой блок на лобной зоне
+            const forehead = landmarks[10];
+            drawGlitchBlock(forehead.x * w, forehead.y * h, eyeDist * 1.2, eyeDist * 0.6);
+
+            // 5. Контурная фиолетовая сетка подбородка и скул
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            const oval = [234, 152, 454];
+            oval.forEach((id, i) => {
+              const pt = landmarks[id];
+              if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
+              else ctx.lineTo(pt.x * w, pt.y * h);
             });
+            ctx.stroke();
+
+            // 6. Datamosh-срез, следующий за уровнем глаз
+            if (Math.random() < 0.6) {
+              const sliceY = Math.floor(leftEye.y * h - 20);
+              const sliceH = Math.floor(eyeDist * 0.4);
+              const shift = (Math.random() - 0.5) * 50;
+              ctx.drawImage(canvas, 0, sliceY, w, sliceH, shift, sliceY, w, sliceH);
+            }
           }
-        }
-
-        // --- 2. АВТОНОМНЫЕ ФИОЛЕТОВЫЕ БЛОКИ (КАК В ВИДЕО ПО ВСЕМУ ЭКРАНУ) ---
-        persistentBoxes.forEach((b) => {
-          b.life--;
-          if (b.life <= 0) {
-            b.x = Math.random();
-            b.y = Math.random();
-            b.w = Math.random() * 0.28 + 0.04;
-            b.h = Math.random() * 0.38 + 0.06;
-            b.life = Math.floor(Math.random() * 15) + 5;
-          }
-
-          if (Math.random() < 0.85) {
-            drawGlitchBox(b.x * w, b.y * h, b.w * w, b.h * h, b.color);
-          }
-        });
-
-        // --- 3. СРЕЗЫ И ДАТАМОШИНГ (СДВИГ ПИКСЕЛЕЙ) ---
-        if (Math.random() < 0.5) {
-          const sliceH = Math.floor(Math.random() * 60) + 15;
-          const sliceY = Math.floor(Math.random() * (h - sliceH));
-          const offset = (Math.random() - 0.5) * 60;
-          ctx.drawImage(canvas, 0, sliceY, w, sliceH, offset, sliceY, w, sliceH);
-        }
-
-        // --- 4. МЕЛКИЙ ЦИФРОВОЙ ШУМ И ПИКСЕЛИ ---
-        ctx.fillStyle = '#ffffff';
-        for (let i = 0; i < 12; i++) {
-          const sx = Math.random() * w;
-          const sy = Math.random() * h;
-          ctx.fillRect(sx, sy, Math.random() * 8 + 2, Math.random() * 4 + 2);
         }
       }
 
       requestAnimationFrame(renderLoop);
     }
 
-    // Старт
+    // Запуск при загрузке страницы
     window.addEventListener('DOMContentLoaded', startCamera);
   </script>
 </body>
