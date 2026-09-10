@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>CONFIDENCE BOOSTER // HUD</title>
+  <title>CYBER HANDS // NEON TRACKING</title>
   
   <style>
     * {
@@ -11,9 +11,8 @@
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: #090a0f;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
-      user-select: none;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
     }
 
     body {
@@ -24,154 +23,93 @@
       justify-content: center;
     }
 
-    /* Окно терминала как в видео */
-    .app-window {
-      position: relative;
-      width: 95vw;
-      max-width: 960px;
-      height: 85vh;
-      max-height: 560px;
-      border: 2px solid #27272a;
-      border-radius: 8px;
-      background: #000;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.8);
-      overflow: hidden;
-    }
-
-    /* Верхняя панель окна */
-    .window-header {
-      height: 28px;
-      background: #18181b;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 10px;
-      font-size: 11px;
-      color: #a1a1aa;
-      border-bottom: 1px solid #27272a;
-    }
-
-    .window-dots {
-      display: flex;
-      gap: 6px;
-    }
-    .dot { width: 9px; height: 9px; border-radius: 50%; }
-    .dot-red { background: #ef4444; }
-    .dot-yellow { background: #eab308; }
-    .dot-green { background: #22c55e; }
-
-    /* Холст с видеопотоком */
-    #hud_canvas {
-      width: 100%;
-      height: calc(100% - 28px);
+    #canvas {
+      width: 100vw;
+      height: 100vh;
       object-fit: cover;
     }
 
-    /* Всплывающее окно с мемом справа */
-    #meme_popup {
+    /* Подсказки по жестам на экране */
+    #hud {
       position: absolute;
-      right: 20px;
-      bottom: 25px;
-      width: 260px;
-      height: 260px;
-      border: 3px solid #22c55e;
+      top: 15px;
+      left: 15px;
+      color: #00ffcc;
+      background: rgba(5, 5, 15, 0.8);
+      padding: 10px 16px;
+      border: 1px solid #00ffcc;
       border-radius: 8px;
-      background: #000;
-      box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
-      display: none;
-      flex-direction: column;
-      overflow: hidden;
-      z-index: 50;
-      animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }
-
-    @keyframes popIn {
-      from { transform: scale(0.6) translateY(40px); opacity: 0; }
-      to { transform: scale(1) translateY(0); opacity: 1; }
-    }
-
-    #meme_img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    .meme-tag {
-      position: absolute;
-      top: 6px;
-      left: 6px;
-      background: rgba(0, 0, 0, 0.75);
-      color: #22c55e;
-      font-size: 10px;
-      font-weight: bold;
-      padding: 3px 6px;
-      border: 1px solid #22c55e;
+      font-size: 13px;
       letter-spacing: 1px;
+      text-transform: uppercase;
+      box-shadow: 0 0 15px rgba(0, 255, 204, 0.3);
+      pointer-events: none;
+      z-index: 10;
+      line-height: 1.5;
     }
 
-    #webcam { display: none; }
+    #hud span {
+      color: #ff00ff;
+      font-weight: bold;
+    }
+
+    #video {
+      display: none;
+    }
   </style>
 
-  <!-- Быстрый CDN MediaPipe Face Mesh -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <!-- Быстрый CDN MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
-
-  <div class="app-window">
-    <div class="window-header">
-      <div class="window-dots">
-        <div class="dot dot-red"></div>
-        <div class="dot dot-yellow"></div>
-        <div class="dot dot-green"></div>
-      </div>
-      <div>confidence_booster.py — [LIVE]</div>
-      <div>v2.4</div>
-    </div>
-
-    <video id="webcam" playsinline autoplay muted></video>
-    <canvas id="hud_canvas"></canvas>
-
-    <!-- Окно бустера с мемом -->
-    <div id="meme_popup">
-      <div class="meme-tag">🔥 BOOST ACTIVATED</div>
-      <img id="meme_img" src="" alt="Meme" />
-    </div>
+  <div id="hud">
+    🖐 <span>РАСКРОЙ ЛАДОНЬ:</span> Энерго-щит<br>
+    👌 <span>СОМКНИ ПАЛЬЦЫ:</span> Спавн 3D-фигур<br>
+    ☝️ <span>ДВИГАЙ ПАЛЬЦЕМ:</span> Неоновый след
   </div>
 
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="canvas"></canvas>
+
   <script>
-    /* =============================================================
-       СПИСОК КАРТИНОК / МЕМОВ
-       Сюда можно прописать свои картинки из папки на GitHub:
-       Например: ['sigma.jpg', 'patrick.png', 'gigachad.gif']
-       ============================================================= */
-    const MEME_LIST = [
-      "bateman.gif",
-      "dicaprio.jpg",
-      "gigachad.png",
-      "rock_eyebrow.gif",
-      "wasted.png"
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const hud = document.getElementById('hud');
+
+    let handsData = [];
+    let isProcessing = false;
+    let trailPoints = []; // Точки для светового следа пальца
+    let shapeRotation = 0; // Угол вращения фигур
+
+    // Цвета для суставов пальцев
+    const FINGER_COLORS = [
+      '#00f0ff', // Большой (Cyan)
+      '#ff0077', // Указательный (Neon Pink)
+      '#ffe600', // Средний (Yellow)
+      '#00ff66', // Безымянный (Green)
+      '#b026ff'  // Мизинец (Purple)
     ];
 
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('hud_canvas');
-    const ctx = canvas.getContext('2d');
-    const popup = document.getElementById('meme_popup');
-    const memeImg = document.getElementById('meme_img');
-
-    let faceBox = null;
-    let isTriggered = false;
-    let triggerTimer = null;
-    let isDetecting = false;
+    // Связи фаланг кисти (скелет руки)
+    const HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],           // Большой
+      [0,5],[5,6],[6,7],[7,8],           // Указательный
+      [5,9],[9,10],[10,11],[11,12],      // Средний
+      [9,13],[13,14],[14,15],[15,16],    // Безымянный
+      [13,17],[17,18],[18,19],[19,20],  // Мизинец
+      [0,17]                             // Ладонь
+    ];
 
     /* -------------------------------------------------------------
-       1. СТАБИЛЬНАЯ ФРОНТАЛЬНАЯ КАМЕРА
+       1. ПОДКЛЮЧЕНИЕ ФРОНТАЛЬНОЙ КАМЕРЫ
        ------------------------------------------------------------- */
-    async function startWebcam() {
+    async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: "user", // Фронтальная камера
+            facingMode: "user",
             width: { ideal: 960 },
             height: { ideal: 540 }
           },
@@ -185,143 +123,144 @@
         canvas.width = video.videoWidth || 960;
         canvas.height = video.videoHeight || 540;
 
-        initFaceMesh();
+        initHands();
         requestAnimationFrame(renderLoop);
-      } catch (err) {
-        alert("Камера недоступна или заблокирована: " + err.message);
+      } catch (e) {
+        hud.innerHTML = `<span style="color:red">ОШИБКА КАМЕРЫ: ${e.message}</span>`;
       }
     }
 
     /* -------------------------------------------------------------
-       2. БЫСТРЫЙ И ЛЕГКИЙ FACE MESH (БЕЗ ЛАГОВ)
+       2. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE HANDS
        ------------------------------------------------------------- */
-    function initFaceMesh() {
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    function initHands() {
+      const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
       });
 
-      faceMesh.setOptions({
-        maxNumFaces: 1,              // Строго 1 лицо для максимального FPS
-        refineLandmarks: false,      // Выключаем тяжелый расчёт зрачков ради плавности
+      hands.setOptions({
+        maxNumHands: 2,              // Трекинг обеих рук одновременно
+        modelComplexity: 1,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5
       });
 
-      faceMesh.onResults(onFaceMeshResults);
+      hands.onResults((results) => {
+        handsData = results.multiHandLandmarks || [];
+      });
 
-      // Цикл отправки кадров (стабильные 30-40 проверок/сек без просадок)
-      async function detect() {
-        if (video.readyState >= 2 && !isDetecting) {
-          isDetecting = true;
+      // Плавный цикл отправки кадров
+      async function step() {
+        if (video.readyState >= 2 && !isProcessing) {
+          isProcessing = true;
           try {
-            await faceMesh.send({ image: video });
-          } catch(e) {}
-          isDetecting = false;
+            await hands.send({ image: video });
+          } catch(err) {}
+          isProcessing = false;
         }
-        setTimeout(detect, 25);
+        setTimeout(step, 20); // ~50 FPS
       }
-      detect();
+      step();
     }
 
     /* -------------------------------------------------------------
-       3. ДЕТЕКТОР ТРИГГЕРА (ОТКРЫЛ РОТ / ПОДНЕС НАПИТОК)
+       3. ФИГУРА 1: ВРАЩАЮЩИЙСЯ КРИСТАЛЛ / КУБ (ПРИ ЩИПКЕ)
        ------------------------------------------------------------- */
-    function onFaceMeshResults(results) {
-      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-        faceBox = null;
-        return;
-      }
+    function drawPinchGeometry(x, y, scale = 1) {
+      shapeRotation += 0.04;
+      const size = 45 * scale;
+      const time = Date.now() * 0.003;
 
-      const lm = results.multiFaceLandmarks[0];
-      const w = canvas.width;
-      const h = canvas.height;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(shapeRotation);
 
-      // Вычисляем габариты лица для прицела
-      let minX = 1, maxX = 0, minY = 1, maxY = 0;
-      for (const p of lm) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-      }
-
-      // Добавляем отступы
-      const padX = (maxX - minX) * 0.15;
-      const padY = (maxY - minY) * 0.18;
-
-      faceBox = {
-        x: (minX - padX) * w,
-        y: (minY - padY) * h,
-        w: (maxX - minX + padX * 2) * w,
-        h: (maxY - minY + padY * 2) * h
-      };
-
-      // Расстояние между губами (13 - верхняя губа, 14 - нижняя)
-      const mouthOpen = Math.hypot(
-        (lm[13].x - lm[14].x) * w,
-        (lm[13].y - lm[14].y) * h
-      );
-
-      // Расстояние между глазами для нормировки масштаба
-      const eyeDist = Math.hypot(
-        (lm[33].x - lm[263].x) * w,
-        (lm[33].y - lm[263].y) * h
-      );
-
-      // ТРИГГЕР: рот открыт шире обычного (глоток напитка, жест или удивление)
-      if (mouthOpen / eyeDist > 0.22) {
-        triggerConfidenceBooster();
-      }
-    }
-
-    /* -------------------------------------------------------------
-       4. АКТИВАЦИЯ БУСТЕРА
-       ------------------------------------------------------------- */
-    function triggerConfidenceBooster() {
-      if (isTriggered) return;
-      isTriggered = true;
-
-      // Выбираем случайный мем из списка
-      const randomMeme = MEME_LIST[Math.floor(Math.random() * MEME_LIST.length)];
-      memeImg.src = randomMeme;
-      popup.style.display = 'flex';
-
-      // Окно держится 3 секунды, затем возвращается в режим поиска
-      clearTimeout(triggerTimer);
-      triggerTimer = setTimeout(() => {
-        popup.style.display = 'none';
-        isTriggered = false;
-      }, 3000);
-    }
-
-    /* -------------------------------------------------------------
-       5. ОТРИСОВКА ТАКТИЧЕСКОГО HUD ИЗ ВИДЕО
-       ------------------------------------------------------------- */
-    function drawCornerBracket(x, y, w, h, size = 18) {
-      ctx.strokeStyle = '#22c55e'; // Яркий зелёный цвет прицела
+      // Внешний светящийся ромб
+      ctx.strokeStyle = `hsl(${(time * 60) % 360}, 100%, 65%)`;
       ctx.lineWidth = 3;
+      ctx.shadowColor = ctx.strokeStyle;
+      ctx.shadowBlur = 15;
 
-      // Верх-лево
       ctx.beginPath();
-      ctx.moveTo(x, y + size); ctx.lineTo(x, y); ctx.lineTo(x + size, y);
+      ctx.moveTo(0, -size);
+      ctx.lineTo(size, 0);
+      ctx.lineTo(0, size);
+      ctx.lineTo(-size, 0);
+      ctx.closePath();
       ctx.stroke();
 
-      // Верх-право
+      // Внутренний вращающийся треугольник
+      ctx.rotate(-shapeRotation * 2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(x + w - size, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + size);
+      for (let i = 0; i < 3; i++) {
+        const angle = (i * 2 * Math.PI) / 3;
+        const tx = Math.cos(angle) * (size * 0.55);
+        const ty = Math.sin(angle) * (size * 0.55);
+        if (i === 0) ctx.moveTo(tx, ty);
+        else ctx.lineTo(tx, ty);
+      }
+      ctx.closePath();
       ctx.stroke();
 
-      // Низ-лево
+      // Ядро энергии в центре
+      ctx.fillStyle = '#00ffff';
       ctx.beginPath();
-      ctx.moveTo(x, y + h - size); ctx.lineTo(x, y + h); ctx.lineTo(x + size, y + h);
-      ctx.stroke();
+      ctx.arc(0, 0, 6 * scale, 0, Math.PI * 2);
+      ctx.fill();
 
-      // Низ-право
-      ctx.beginPath();
-      ctx.moveTo(x + w - size, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - size);
-      ctx.stroke();
+      ctx.restore();
     }
 
+    /* -------------------------------------------------------------
+       4. ФИГУРА 2: ЭНЕРГО-ЩИТ (ПРИ РАСКРЫТОЙ ЛАДОНИ)
+       ------------------------------------------------------------- */
+    function drawEnergyShield(cx, cy, radius) {
+      const time = Date.now() * 0.002;
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // 1. Внешний круг щита
+      ctx.strokeStyle = 'rgba(255, 0, 128, 0.8)';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#ff007f';
+      ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 2. Вращающееся кольцо рун/сегментов
+      ctx.rotate(time);
+      ctx.strokeStyle = 'rgba(0, 255, 204, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 12]);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 3. Звезда / Гексаграмма в центре
+      ctx.rotate(-time * 1.8);
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3;
+        const r = i % 2 === 0 ? radius * 0.65 : radius * 0.35;
+        const px = Math.cos(a) * r;
+        const py = Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    /* -------------------------------------------------------------
+       5. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА НА CANVAS
+       ------------------------------------------------------------- */
     function renderLoop() {
       const w = canvas.width;
       const h = canvas.height;
@@ -329,74 +268,143 @@
       if (video.readyState >= 2) {
         ctx.save();
 
-        // 1. Отражаем по горизонтали (Зеркало для фронталки)
+        // 1. Зеркальное отображение видео с камеры
         ctx.translate(w, 0);
         ctx.scale(-1, 1);
+        // Рисуем слегка затемненное видео, чтобы неон горел ярче
         ctx.drawImage(video, 0, 0, w, h);
+        ctx.fillStyle = 'rgba(0, 0, 10, 0.35)';
+        ctx.fillRect(0, 0, w, h);
+
         ctx.restore();
 
-        // 2. Рамка-прицел на лице (с поправкой на зеркальное отражение)
-        if (faceBox) {
-          const mirroredX = w - faceBox.x - faceBox.w;
-          drawCornerBracket(mirroredX, faceBox.y, faceBox.w, faceBox.h);
+        // Массив кончиков указательных пальцев (для молнии между 2 руками)
+        const indexTips = [];
 
-          // Метка под лицом
-          ctx.fillStyle = '#22c55e';
-          ctx.font = 'bold 12px monospace';
-          ctx.fillText('TARGET_LOCKED', mirroredX + 6, faceBox.y + faceBox.h + 16);
+        // 2. ОБРАБОТКА И ТРЕКИНГ РУК
+        if (handsData.length > 0) {
+          handsData.forEach((landmarks) => {
+            // Координаты с учетом зеркалирования
+            const pts = landmarks.map(p => ({
+              x: (1 - p.x) * w,
+              y: p.y * h
+            }));
+
+            // --- А) РИСУЕМ НЕОНОВЫЙ КИБЕР-СКЕЛЕТ РУКИ ---
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 10;
+
+            HAND_CONNECTIONS.forEach(([i, j]) => {
+              const grad = ctx.createLinearGradient(pts[i].x, pts[i].y, pts[j].x, pts[j].y);
+              grad.addColorStop(0, '#00f0ff');
+              grad.addColorStop(1, '#ff0077');
+              ctx.strokeStyle = grad;
+              ctx.shadowColor = '#00f0ff';
+
+              ctx.beginPath();
+              ctx.moveTo(pts[i].x, pts[i].y);
+              ctx.lineTo(pts[j].x, pts[j].y);
+              ctx.stroke();
+            });
+
+            // --- Б) РИСУЕМ СВЕТЯЩИЕСЯ СУСТАВЫ ---
+            pts.forEach((pt, idx) => {
+              const isTip = [4, 8, 12, 16, 20].includes(idx);
+              ctx.fillStyle = isTip ? '#ffffff' : '#00ffcc';
+              ctx.shadowColor = isTip ? '#ff0077' : '#00ffcc';
+              ctx.shadowBlur = isTip ? 16 : 8;
+
+              ctx.beginPath();
+              ctx.arc(pt.x, pt.y, isTip ? 6 : 4, 0, Math.PI * 2);
+              ctx.fill();
+            });
+
+            // Сохраняем кончик указательного пальца (8)
+            indexTips.push(pts[8]);
+
+            // Добавляем след от указательного пальца
+            trailPoints.push({
+              x: pts[8].x,
+              y: pts[8].y,
+              life: 1.0,
+              hue: (Date.now() * 0.2) % 360
+            });
+
+            // --- В) ЖЕСТ 1: ЩИПОК (БОЛЬШОЙ + УКАЗАТЕЛЬНЫЙ) ---
+            const pinchDist = Math.hypot(pts[4].x - pts[8].x, pts[4].y - pts[8].y);
+            if (pinchDist < 45) {
+              const midX = (pts[4].x + pts[8].x) / 2;
+              const midY = (pts[4].y + pts[8].y) / 2;
+              drawPinchGeometry(midX, midY, (50 - pinchDist) / 30 + 0.8);
+            }
+
+            // --- Г) ЖЕСТ 2: РАСКРЫТАЯ ЛАДОНЬ (ЭНЕРГО-ЩИТ) ---
+            // Сравниваем расстояние от кончиков до основания ладони (0)
+            const palmCenter = {
+              x: (pts[0].x + pts[9].x) / 2,
+              y: (pts[0].y + pts[9].y) / 2
+            };
+            const palmDist = Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y);
+            const isOpenPalm = [8, 12, 16, 20].every(tipId => {
+              return Math.hypot(pts[tipId].x - pts[0].x, pts[tipId].y - pts[0].y) > palmDist * 1.5;
+            });
+
+            if (isOpenPalm && pinchDist >= 45) {
+              drawEnergyShield(palmCenter.x, palmCenter.y, palmDist * 1.2);
+            }
+          });
+
+          // --- Д) МОЛНИЯ МЕЖДУ ДВУМЯ РУКАМИ ---
+          if (indexTips.length === 2) {
+            ctx.save();
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 3;
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 18;
+
+            ctx.beginPath();
+            ctx.moveTo(indexTips[0].x, indexTips[0].y);
+
+            // Зигзаг электрического разряда
+            const steps = 8;
+            for (let s = 1; s < steps; s++) {
+              const t = s / steps;
+              const lx = indexTips[0].x + (indexTips[1].x - indexTips[0].x) * t;
+              const ly = indexTips[0].y + (indexTips[1].y - indexTips[0].y) * t;
+              const jitter = (Math.random() - 0.5) * 35;
+              ctx.lineTo(lx + jitter, ly + jitter);
+            }
+
+            ctx.lineTo(indexTips[1].x, indexTips[1].y);
+            ctx.stroke();
+            ctx.restore();
+          }
         }
 
-        // 3. Элементы HUD из видео:
-        // [REC / LIVE] в левом углу
-        ctx.fillStyle = '#ef4444';
-        ctx.beginPath();
-        ctx.arc(25, 25, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 13px monospace';
-        ctx.fillText('LIVE', 38, 29);
+        // 3. ОТРИСОВКА СВЕТОВОГО СЛЕДА (AIR DRAWING)
+        for (let i = trailPoints.length - 1; i >= 0; i--) {
+          const tp = trailPoints[i];
+          tp.life -= 0.025; // Скорость угасания
 
-        // Таймкод внизу
-        const now = new Date();
-        const tc = `00:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}:${String(Math.floor(now.getMilliseconds()/10)).padStart(2, '0')}`;
-        ctx.fillStyle = '#22c55e';
-        ctx.font = '12px monospace';
-        ctx.fillText(`REC: ${tc}`, 20, h - 20);
+          if (tp.life <= 0) {
+            trailPoints.splice(i, 1);
+            continue;
+          }
 
-        // 4. ТАКТИЧЕСКИЙ РАДАР В ПРАВОМ ВЕРХНЕМ УГЛУ
-        const radarX = w - 150;
-        const radarY = 20;
-        const radarW = 130;
-        const radarH = 80;
+          ctx.fillStyle = `hsla(${tp.hue}, 100%, 60%, ${tp.life})`;
+          ctx.shadowColor = `hsl(${tp.hue}, 100%, 60%)`;
+          ctx.shadowBlur = 12;
 
-        ctx.strokeStyle = isTriggered ? '#22c55e' : '#52525b';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(radarX, radarY, radarW, radarH);
-
-        // Прицельная сетка в радаре
-        ctx.beginPath();
-        ctx.moveTo(radarX + radarW/2, radarY + 10);
-        ctx.lineTo(radarX + radarW/2, radarY + radarH - 10);
-        ctx.moveTo(radarX + 15, radarY + radarH/2);
-        ctx.lineTo(radarX + radarW - 15, radarY + radarH/2);
-        ctx.stroke();
-
-        // Статус радара
-        ctx.fillStyle = isTriggered ? '#22c55e' : '#a1a1aa';
-        ctx.font = 'bold 12px monospace';
-        ctx.textAlign = 'center';
-        if (isTriggered) {
-          ctx.fillText('MATCHED! 🔥', radarX + radarW/2, radarY + radarH/2 + 4);
-        } else {
-          ctx.fillText('SEARCHING...', radarX + radarW/2, radarY + radarH/2 + 4);
+          ctx.beginPath();
+          ctx.arc(tp.x, tp.y, 8 * tp.life, 0, Math.PI * 2);
+          ctx.fill();
         }
-        ctx.textAlign = 'left';
       }
 
       requestAnimationFrame(renderLoop);
     }
 
-    window.addEventListener('DOMContentLoaded', startWebcam);
+    window.addEventListener('DOMContentLoaded', startCamera);
   </script>
 </body>
 </html>
