@@ -5,19 +5,19 @@
 <title>RetroLens</title>
 <style>
   body{margin:0;background:#111;color:#0f0;font-family:monospace;display:flex;flex-direction:column;align-items:center}
-  #wrap{position:relative}
   video{display:none}
   canvas{max-width:100%;border:2px solid #0f0}
-  #hud{padding:6px;text-align:center}
+  #hud{padding:6px;text-align:center;font-size:14px}
   #hud b{color:#ff0}
 </style>
 </head>
 <body>
-<div id="hud">Фильтр: <b id="fname">normal</b> | Большой палец касается кончика пальца → фильтр</div>
-<div id="wrap">
-  <video id="video" autoplay playsinline></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+<div id="hud">
+  РЕЖИМ: <b id="modeName">PERSEGI 2D</b> [клавиша 'c' / кулаки 2 руками] &nbsp;|&nbsp;
+  ФИЛЬТР: <b id="fname">dual-tone</b> [касание большой-мизинец / 'n' / 'p']
 </div>
+<canvas id="canvas" width="640" height="480"></canvas>
+<video id="video" autoplay playsinline></video>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -25,89 +25,153 @@
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const off = document.createElement('canvas');
+off.width = canvas.width; off.height = canvas.height;
+const octx = off.getContext('2d');
 const fname = document.getElementById('fname');
+const modeName = document.getElementById('modeName');
 
-const filters = ['normal','invert','thermal','sketch','pixelate','red-channel','cartoon'];
+const FILTERS = ['dual-tone','thermal','sketch','pixelate','glitch','invert','red-channel','edge','blur','cartoon','rainbow-wave'];
 let fi = 0;
-let lastSwitch = 0;
+let mode3D = false; // false = PERSEGI 2D, true = 3D Full 5 Jari
+let lastFilterSwitch = 0, lastModeSwitch = 0;
 
-// Кончики пальцев: 4=большой,8=указательный,12=средний,16=безымянный,20=мизинец
-function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+document.addEventListener('keydown', e=>{
+  if(e.key==='n') nextFilter();
+  if(e.key==='p') prevFilter();
+  if(e.key==='c') toggleMode();
+});
+function nextFilter(){ fi=(fi+1)%FILTERS.length; fname.textContent=FILTERS[fi]; }
+function prevFilter(){ fi=(fi-1+FILTERS.length)%FILTERS.length; fname.textContent=FILTERS[fi]; }
+function toggleMode(){ mode3D=!mode3D; modeName.textContent = mode3D? '3D Full 5 Jari' : 'PERSEGI 2D'; }
 
-// Возвращает индекс пальца (8/12/16/20), которого коснулся большой палец, либо null
-function touchedFinger(lm){
-  const thumb = lm[4];
-  const tips = [8,12,16,20];
-  for(const t of tips){
-    if(dist(thumb, lm[t]) < 0.05) return t; // порог касания
-  }
-  return null;
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function isFist(lm){
+  const tips=[8,12,16,20], pips=[6,10,14,18];
+  return tips.every((t,i)=>lm[t].y > lm[pips[i]].y);
 }
+function px(lm){ return {x: lm.x*canvas.width, y: lm.y*canvas.height}; }
 
-function applyFilter(name){
-  const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+// Применяет фильтр ко всему offscreen-кадру (потом вырезаем через clip)
+function renderFiltered(name){
+  octx.drawImage(video,0,0,off.width,off.height);
+  const img = octx.getImageData(0,0,off.width,off.height);
   const d = img.data;
+  const t = performance.now()/300;
   if(name==='invert'){
     for(let i=0;i<d.length;i+=4){d[i]=255-d[i];d[i+1]=255-d[i+1];d[i+2]=255-d[i+2];}
   } else if(name==='thermal'){
-    for(let i=0;i<d.length;i+=4){
-      const g=(d[i]+d[i+1]+d[i+2])/3;
-      d[i]=Math.min(255,g*2); d[i+1]=g; d[i+2]=255-g;
-    }
+    for(let i=0;i<d.length;i+=4){const g=(d[i]+d[i+1]+d[i+2])/3;d[i]=Math.min(255,g*2);d[i+1]=g;d[i+2]=255-g;}
   } else if(name==='sketch'){
-    for(let i=0;i<d.length;i+=4){
-      const g=255-((d[i]+d[i+1]+d[i+2])/3);
-      d[i]=d[i+1]=d[i+2]=g;
-    }
+    for(let i=0;i<d.length;i+=4){const g=255-((d[i]+d[i+1]+d[i+2])/3);d[i]=d[i+1]=d[i+2]=g;}
   } else if(name==='red-channel'){
     for(let i=0;i<d.length;i+=4){d[i+1]=0;d[i+2]=0;}
+  } else if(name==='dual-tone'){
+    for(let i=0;i<d.length;i+=4){const g=(d[i]+d[i+1]+d[i+2])/3; if(g>128){d[i]=255;d[i+1]=180;d[i+2]=0;}else{d[i]=20;d[i+1]=20;d[i+2]=120;}}
   } else if(name==='cartoon'){
-    for(let i=0;i<d.length;i+=4){
-      d[i]=Math.round(d[i]/60)*60;
-      d[i+1]=Math.round(d[i+1]/60)*60;
-      d[i+2]=Math.round(d[i+2]/60)*60;
+    for(let i=0;i<d.length;i+=4){d[i]=Math.round(d[i]/50)*50;d[i+1]=Math.round(d[i+1]/50)*50;d[i+2]=Math.round(d[i+2]/50)*50;}
+  } else if(name==='edge'){
+    const w=off.width,h=off.height, src=new Uint8ClampedArray(d);
+    for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+      const i=(y*w+x)*4;
+      const gx = src[i-4]-src[i+4];
+      const gy = src[i-w*4]-src[i+w*4];
+      const e = Math.min(255, Math.hypot(gx,gy));
+      d[i]=d[i+1]=d[i+2]=e;
     }
+  } else if(name==='rainbow-wave'){
+    for(let y=0;y<off.height;y++)for(let x=0;x<off.width;x++){
+      const i=(y*off.width+x)*4;
+      const hue = ((x/off.width)*360 + t*60) % 360;
+      const c = hsv2rgb(hue,0.6,1);
+      d[i]=(d[i]*0.4+c[0]*0.6); d[i+1]=(d[i+1]*0.4+c[1]*0.6); d[i+2]=(d[i+2]*0.4+c[2]*0.6);
+    }
+  } else if(name==='glitch'){
+    const w=off.width,h=off.height;
+    for(let y=0;y<h;y+=4){
+      const shift = Math.floor(Math.sin(y*0.1+t)*20);
+      const row = octx.getImageData(0,y,w,4);
+      octx.putImageData(row, shift, y);
+    }
+    return; // уже нарисовано напрямую в octx
   }
-  if(name!=='pixelate') ctx.putImageData(img,0,0);
-  if(name==='pixelate'){
-    const size=16;
-    for(let y=0;y<canvas.height;y+=size){
-      for(let x=0;x<canvas.width;x+=size){
-        const p = ctx.getImageData(x,y,1,1).data;
-        ctx.fillStyle=`rgb(${p[0]},${p[1]},${p[2]})`;
-        ctx.fillRect(x,y,size,size);
-      }
-    }
+  octx.putImageData(img,0,0);
+  if(name==='pixelate' || name==='blur'){
+    const size = name==='pixelate'?14:6;
+    const small = document.createElement('canvas');
+    small.width=off.width/size; small.height=off.height/size;
+    small.getContext('2d').drawImage(off,0,0,small.width,small.height);
+    octx.imageSmoothingEnabled = name==='blur';
+    octx.clearRect(0,0,off.width,off.height);
+    octx.drawImage(small,0,0,off.width,off.height);
   }
 }
-
-const hands = new Hands({locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-hands.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:0.6,minTrackingConfidence:0.6});
-hands.onResults(onResults);
+function hsv2rgb(h,s,v){
+  const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+  let r,g,b;
+  if(h<60){r=c;g=x;b=0;} else if(h<120){r=x;g=c;b=0;} else if(h<180){r=0;g=c;b=x;}
+  else if(h<240){r=0;g=x;b=c;} else if(h<300){r=x;g=0;b=c;} else {r=c;g=0;b=x;}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];
+}
 
 function onResults(res){
-  ctx.save();
   ctx.clearRect(0,0,canvas.width,canvas.height);
   ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
 
-  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
-    const lm = res.multiHandLandmarks[0];
-    const now = Date.now();
-    const t = touchedFinger(lm);
-    if(t && now-lastSwitch>600){
-      // указательный->invert, средний->thermal, безымянный->sketch, мизинец->pixelate
-      const map = {8:1, 12:2, 16:3, 20:4};
-      fi = map[t] ?? fi;
-      lastSwitch = now;
+  const handsData = res.multiHandLandmarks || [];
+  const now = performance.now();
+
+  // Жест: обе руки — кулак -> переключить режим
+  if(handsData.length===2 && isFist(handsData[0]) && isFist(handsData[1]) && now-lastModeSwitch>900){
+    toggleMode(); lastModeSwitch = now;
+  }
+  // Жест: большой+мизинец касаются -> след. фильтр
+  for(const lm of handsData){
+    if(dist(lm[4],lm[20])<0.05 && now-lastFilterSwitch>600){
+      nextFilter(); lastFilterSwitch = now; break;
     }
   }
-  applyFilter(filters[fi]);
-  fname.textContent = filters[fi];
-  ctx.restore();
+
+  let poly = null;
+  if(!mode3D && handsData.length===2){
+    // ПРЯМОУГОЛЬНИК: большой+указательный палец каждой руки = 4 угла окна
+    const A = handsData[0], B = handsData[1];
+    poly = [px(A[4]), px(A[8]), px(B[8]), px(B[4])];
+  } else if(mode3D && handsData.length>=1){
+    // ВЕЕР 5 ПАЛЬЦЕВ одной руки
+    const A = handsData[0];
+    poly = [4,8,12,16,20].map(i=>px(A[i]));
+  }
+
+  if(poly && poly.length>=3){
+    renderFiltered(FILTERS[fi]);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(off,0,0,canvas.width,canvas.height);
+    ctx.restore();
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Точки на пальцах (золотые, как в оригинале)
+  ctx.fillStyle = '#ffd700';
+  for(const lm of handsData) for(const p of lm){
+    const c = px(p);
+    ctx.beginPath(); ctx.arc(c.x,c.y,3,0,7); ctx.fill();
+  }
 }
 
+const handsModel = new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+handsModel.setOptions({maxNumHands:2, modelComplexity:1, minDetectionConfidence:0.6, minTrackingConfidence:0.6});
+handsModel.onResults(onResults);
+
 const camera = new Camera(video, {
-  onFrame: async ()=>{ await hands.send({image: video}); },
+  onFrame: async ()=>{ await handsModel.send({image: video}); },
   width:640, height:480
 });
 camera.start();
