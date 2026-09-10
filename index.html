@@ -302,9 +302,37 @@ async function startCamera(){
   requestAnimationFrame(frameLoop);
 }
 
-startCamera().catch(err=>{
-  loadingEl.textContent = 'Не удалось получить доступ к камере: '+err.message;
-});
+async function listCameras(){
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d=>d.kind==='videoinput');
+    return cams.map(c=>c.label || '(без названия — доступ ещё не выдан)').join('; ') || 'камеры не найдены';
+  }catch(e){ return 'не удалось получить список камер: '+e.message; }
+}
+
+function showCameraError(err){
+  listCameras().then(camList=>{
+    loadingEl.innerHTML =
+      '<div style="max-width:90vw;text-align:center;line-height:1.5">' +
+      '<div style="color:#f55;font-weight:bold">Ошибка камеры</div>' +
+      '<div>Тип: '+(err.name||'Unknown')+'</div>' +
+      '<div>Сообщение: '+(err.message||String(err))+'</div>' +
+      '<div style="margin-top:6px;font-size:12px;opacity:.8">Найденные камеры: '+camList+'</div>' +
+      '<div style="margin-top:6px;font-size:12px;opacity:.8">Protocol: '+location.protocol+', isSecureContext: '+isSecureContext+'</div>' +
+      '<button id="retryBtn" style="margin-top:12px;padding:8px 16px;font-family:monospace;background:#0f0;color:#000;border:none;border-radius:4px">Повторить</button>' +
+      '</div>';
+    const btn = document.getElementById('retryBtn');
+    if(btn) btn.onclick = ()=>{ loadingEl.textContent='Загрузка камеры…'; startCamera().catch(showCameraError); };
+  });
+}
+
+if(!isSecureContext){
+  showCameraError({name:'InsecureContext', message:'Страница открыта не по HTTPS — браузер блокирует доступ к камере.'});
+} else if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+  showCameraError({name:'Unsupported', message:'Этот браузер не поддерживает getUserMedia.'});
+} else {
+  startCamera().catch(showCameraError);
+}
 </script>
 </body>
 </html>
