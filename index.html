@@ -2,34 +2,83 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>RetroLens</title>
 <style>
-  body{margin:0;background:#111;color:#0f0;font-family:monospace;display:flex;flex-direction:column;align-items:center}
+  html,body{
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:#000; color:#0f0; font-family:monospace;
+  }
+  #stage{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000;
+  }
   video{display:none}
-  canvas{max-width:100%;border:2px solid #0f0}
-  #hud{padding:6px;text-align:center;font-size:14px}
+  canvas{
+    width:100vw; height:100vh; display:block;
+    object-fit:cover;
+  }
+  #hud{
+    position:fixed; top:0; left:0; right:0;
+    padding:8px 6px; text-align:center; font-size:13px;
+    background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0));
+    pointer-events:none; z-index:10;
+  }
   #hud b{color:#ff0}
+  #fps{
+    position:fixed; bottom:6px; right:8px; font-size:11px; color:#0f0;
+    opacity:.6; z-index:10;
+  }
+  #loading{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000; color:#0f0; font-size:16px; z-index:20;
+  }
 </style>
 </head>
 <body>
+<div id="loading">Загрузка камеры…</div>
 <div id="hud">
   РЕЖИМ: <b id="modeName">PERSEGI 2D</b> [клавиша 'c' / кулаки 2 руками] &nbsp;|&nbsp;
   ФИЛЬТР: <b id="fname">dual-tone</b> [касание большой-мизинец / 'n' / 'p']
 </div>
-<canvas id="canvas" width="640" height="480"></canvas>
-<video id="video" autoplay playsinline></video>
+<div id="fps"></div>
+<div id="stage">
+  <canvas id="canvas"></canvas>
+</div>
+<video id="video" autoplay playsinline muted></video>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 <script>
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const off = document.createElement('canvas');
-off.width = canvas.width; off.height = canvas.height;
-const octx = off.getContext('2d');
+const ctx = canvas.getContext('2d', {alpha:false, desynchronized:true});
+const loadingEl = document.getElementById('loading');
+const fpsEl = document.getElementById('fps');
 const fname = document.getElementById('fname');
 const modeName = document.getElementById('modeName');
+
+// ---------- Размер холста под весь экран (с учётом реального разрешения камеры) ----------
+let srcW = 640, srcH = 480; // обновится, когда видео отдаст реальный размер
+function fitCanvasToScreen(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // ограничиваем DPR ради производительности
+  const cssW = window.innerWidth, cssH = window.innerHeight;
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', fitCanvasToScreen);
+fitCanvasToScreen();
+
+// Offscreen-буфер держим в разрешении исходного видео (дешевле, чем в разрешении экрана),
+// а на экран растягиваем через drawImage.
+const off = document.createElement('canvas');
+const octx = off.getContext('2d', {alpha:false, willReadFrequently:true});
+// Переиспользуемый маленький канвас для pixelate/blur (не создаём заново каждый кадр)
+const small = document.createElement('canvas');
+const sctx = small.getContext('2d');
 
 const FILTERS = ['dual-tone','thermal','sketch','pixelate','glitch','invert','red-channel','edge','blur','cartoon','rainbow-wave'];
 let fi = 0;
@@ -50,7 +99,21 @@ function isFist(lm){
   const tips=[8,12,16,20], pips=[6,10,14,18];
   return tips.every((t,i)=>lm[t].y > lm[pips[i]].y);
 }
-function px(lm){ return {x: lm.x*canvas.width, y: lm.y*canvas.height}; }
+// Переводим нормализованные координаты landmark в пиксели ЭКРАНА (canvas),
+// учитывая, что видео растягивается с object-fit: cover.
+function px(lm){
+  const {sx, sy, sw, sh} = coverTransform();
+  return { x: sx + lm.x*sw, y: sy + lm.y*sh };
+}
+// Вычисляет смещение/масштаб как при object-fit: cover для видео srcW×srcH в canvas cw×ch
+function coverTransform(){
+  const cw = canvas.width / (window.devicePixelRatio ? Math.min(window.devicePixelRatio,2) : 1);
+  const ch = canvas.height / (window.devicePixelRatio ? Math.min(window.devicePixelRatio,2) : 1);
+  const scale = Math.max(cw/srcW, ch/srcH);
+  const dw = srcW*scale, dh = srcH*scale;
+  const dx = (cw-dw)/2, dy = (ch-dh)/2;
+  return {sx:dx, sy:dy, sw:dw, sh:dh};
+}
 
 // Применяет фильтр ко всему offscreen-кадру (потом вырезаем через clip)
 function renderFiltered(name){
@@ -98,9 +161,11 @@ function renderFiltered(name){
   octx.putImageData(img,0,0);
   if(name==='pixelate' || name==='blur'){
     const size = name==='pixelate'?14:6;
-    const small = document.createElement('canvas');
-    small.width=off.width/size; small.height=off.height/size;
-    small.getContext('2d').drawImage(off,0,0,small.width,small.height);
+    const sw = Math.max(1, Math.round(off.width/size));
+    const sh = Math.max(1, Math.round(off.height/size));
+    if(small.width!==sw) small.width = sw;
+    if(small.height!==sh) small.height = sh;
+    sctx.drawImage(off,0,0,sw,sh);
     octx.imageSmoothingEnabled = name==='blur';
     octx.clearRect(0,0,off.width,off.height);
     octx.drawImage(small,0,0,off.width,off.height);
@@ -114,9 +179,27 @@ function hsv2rgb(h,s,v){
   return [(r+m)*255,(g+m)*255,(b+m)*255];
 }
 
+// ---------- FPS-счётчик (лёгкий, обновляется раз в секунду) ----------
+let frames=0, lastFpsT=performance.now();
+function tickFps(){
+  frames++;
+  const now = performance.now();
+  if(now-lastFpsT>=1000){
+    fpsEl.textContent = frames+' fps';
+    frames=0; lastFpsT=now;
+  }
+}
+
 function onResults(res){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
+  if(loadingEl.style.display!=='none'){ loadingEl.style.display='none'; }
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = canvas.width/dpr, ch = canvas.height/dpr;
+  ctx.clearRect(0,0,cw,ch);
+
+  // Рисуем видео на весь экран, имитируя object-fit: cover
+  const {sx, sy, sw, sh} = coverTransform();
+  ctx.drawImage(res.image, sx, sy, sw, sh);
 
   const handsData = res.multiHandLandmarks || [];
   const now = performance.now();
@@ -151,7 +234,7 @@ function onResults(res){
     for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x, poly[i].y);
     ctx.closePath();
     ctx.clip();
-    ctx.drawImage(off,0,0,canvas.width,canvas.height);
+    ctx.drawImage(off, sx, sy, sw, sh);
     ctx.restore();
     ctx.strokeStyle = '#ffd700';
     ctx.lineWidth = 2;
@@ -164,17 +247,50 @@ function onResults(res){
     const c = px(p);
     ctx.beginPath(); ctx.arc(c.x,c.y,3,0,7); ctx.fill();
   }
+
+  tickFps();
 }
 
 const handsModel = new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-handsModel.setOptions({maxNumHands:2, modelComplexity:1, minDetectionConfidence:0.6, minTrackingConfidence:0.6});
+handsModel.setOptions({
+  maxNumHands:2,
+  modelComplexity:1,
+  minDetectionConfidence:0.6,
+  minTrackingConfidence:0.6
+});
 handsModel.onResults(onResults);
 
-const camera = new Camera(video, {
-  onFrame: async ()=>{ await handsModel.send({image: video}); },
-  width:640, height:480
+// Запрашиваем камеру напрямую с хорошим разрешением и передней/задней камерой на выбор,
+// чтобы получить максимум качества, которое реально может дать устройство.
+async function startCamera(){
+  const constraints = {
+    audio:false,
+    video:{
+      facingMode:'user',
+      width:{ideal:1280},
+      height:{ideal:720},
+      frameRate:{ideal:30, max:30}
+    }
+  };
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = stream;
+  await video.play();
+
+  srcW = video.videoWidth || 1280;
+  srcH = video.videoHeight || 720;
+  off.width = srcW; off.height = srcH;
+
+  const camera = new Camera(video, {
+    onFrame: async ()=>{ await handsModel.send({image: video}); },
+    width: srcW,
+    height: srcH
+  });
+  camera.start();
+}
+
+startCamera().catch(err=>{
+  loadingEl.textContent = 'Не удалось получить доступ к камере: '+err.message;
 });
-camera.start();
 </script>
 </body>
 </html>
