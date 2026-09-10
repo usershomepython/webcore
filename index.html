@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>WEBCORE // REAL TRACKING</title>
+  <title>WEBCORE // ANY OBJECT TRACKING</title>
   
   <style>
     * {
@@ -12,6 +12,7 @@
       padding: 0;
       overflow: hidden;
       background: #000;
+      font-family: monospace;
     }
 
     body {
@@ -22,62 +23,69 @@
       justify-content: center;
     }
 
-    #glitch_canvas {
+    #canvas {
       width: 100vw;
       height: 100vh;
       object-fit: cover;
-      filter: contrast(130%) saturate(160%);
+      filter: contrast(135%) saturate(160%);
     }
 
-    /* Информационный оверлей для проверки работы трекинга */
     #hud {
       position: absolute;
-      top: 12px;
-      left: 12px;
-      font-family: monospace;
-      font-size: 14px;
+      top: 14px;
+      left: 14px;
+      font-size: 13px;
       font-weight: bold;
       color: #ff0055;
-      background: rgba(0, 0, 0, 0.75);
-      padding: 6px 12px;
-      border: 1px solid #d946ef;
+      background: rgba(10, 0, 20, 0.85);
+      padding: 8px 14px;
+      border-left: 4px solid #d946ef;
       z-index: 100;
       pointer-events: none;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
-    #video_source {
+    #video {
       display: none;
     }
   </style>
 
-  <!-- CDN MediaPipe Face Mesh & Camera Utils -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <!-- Подключение TensorFlow.js и детектора любых объектов COCO-SSD -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 </head>
 
 <body>
-  <div id="hud">STATUS: INITIALIZING...</div>
-  <video id="video_source" playsinline></video>
-  <canvas id="glitch_canvas"></canvas>
+  <div id="hud">SYSTEM BOOT // CAMERA INIT...</div>
+  <video id="video" playsinline></video>
+  <canvas id="canvas"></canvas>
 
   <script>
-    const video = document.getElementById('video_source');
-    const canvas = document.getElementById('glitch_canvas');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const hud = document.getElementById('hud');
 
-    let detectedFaces = [];
-    let isTrackingBusy = false;
+    // Вспомогательный маленький холст для быстрого оптического анализа контуров (60 FPS)
+    const scanCanvas = document.createElement('canvas');
+    const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+    scanCanvas.width = 120;
+    scanCanvas.height = 68;
+
+    let objectModel = null;
+    let aiDetections = [];
+    let isDetecting = false;
+    let prevFrameData = null;
 
     /* -------------------------------------------------------------
-       1. СТАБИЛЬНЫЙ ЗАПУСК ОСНОВНОЙ КАМЕРЫ
+       1. ПОДКЛЮЧЕНИЕ ОСНОВНОЙ КАМЕРЫ
        ------------------------------------------------------------- */
-    async function startCamera() {
-      hud.innerText = "STATUS: REQUESTING REAR CAMERA...";
+    async function initCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: "environment" },
+            facingMode: { ideal: "environment" }, // Задняя камера
             width: { ideal: 1280 },
             height: { ideal: 720 }
           },
@@ -86,7 +94,6 @@
 
         video.srcObject = stream;
         
-        // Ждем обязательной готовности метаданных видео
         await new Promise((resolve) => {
           video.onloadedmetadata = () => {
             video.play();
@@ -97,166 +104,171 @@
         canvas.width = video.videoWidth || 1280;
         canvas.height = video.videoHeight || 720;
 
-        hud.innerText = "STATUS: CAMERA READY, LOADING MODEL...";
-        initFaceMesh();
+        hud.innerText = "CAMERA ACTIVE // LOADING OBJECT AI...";
+        
+        // Запуск AI-модели детекции объектов
+        loadAIModel();
+
+        // Запуск визуального рендера
         requestAnimationFrame(renderLoop);
       } catch (err) {
-        console.error("Camera Error:", err);
-        hud.innerText = `CAMERA ERROR: ${err.message}`;
+        hud.innerText = `CAMERA_ERR: ${err.message}`;
         hud.style.color = "red";
       }
     }
 
     /* -------------------------------------------------------------
-       2. ИНИЦИАЛИЗАЦИЯ И ОБРАБОТКА MEDIAPIPE FACE MESH
+       2. ЗАГРУЗКА AI-МОДЕЛИ ДЛЯ ЛЮБЫХ ОБЪЕКТОВ (COCO-SSD)
        ------------------------------------------------------------- */
-    function initFaceMesh() {
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-      });
+    async function loadAIModel() {
+      try {
+        objectModel = await cocoSsd.load();
+        hud.innerText = "SYSTEM ACTIVE // TRACKING ANY OBJECTS";
+        hud.style.color = "#00ff66";
+        startAIDetectionLoop();
+      } catch (e) {
+        console.warn("AI Model load warning, using optical tracking:", e);
+        hud.innerText = "CV OPTICAL TRACKING ACTIVE";
+        hud.style.color = "#d946ef";
+      }
+    }
 
-      faceMesh.setOptions({
-        maxNumFaces: 2,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-
-      faceMesh.onResults((results) => {
-        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          detectedFaces = results.multiFaceLandmarks;
-          hud.innerText = `TRACKING ACTIVE // FACES: ${detectedFaces.length}`;
-          hud.style.color = "#00ff66";
-        } else {
-          detectedFaces = [];
-          hud.innerText = "TRACKING ACTIVE // NO FACE IN FRAME";
-          hud.style.color = "#d946ef";
+    async function startAIDetectionLoop() {
+      if (objectModel && video.readyState >= 2 && !isDetecting) {
+        isDetecting = true;
+        try {
+          const predictions = await objectModel.detect(video);
+          // Фильтруем распознанные объекты с уверенностью от 40%
+          aiDetections = predictions.filter(p => p.score > 0.4);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          isDetecting = false;
         }
-      });
+      }
+      setTimeout(startAIDetectionLoop, 80); // ~12 проверок в секунду
+    }
 
-      // Безопасный цикл трекинга кадров без утечек и зависаний
-      async function sendFrame() {
-        if (video.readyState >= 2 && !isTrackingBusy) {
-          isTrackingBusy = true;
-          try {
-            await faceMesh.send({ image: video });
-          } catch (e) {
-            console.error("Tracking Frame Error:", e);
-          } finally {
-            isTrackingBusy = false;
+    /* -------------------------------------------------------------
+       3. ОПТИЧЕСКИЙ ТРЕКИНГ КОНТУРОВ И ДВИЖЕНИЯ (ДЛЯ ДЕРЕВЬЕВ И ПРИРОДЫ)
+       ------------------------------------------------------------- */
+    function detectOpticalObjects(w, h) {
+      const sw = scanCanvas.width;
+      const sh = scanCanvas.height;
+      scanCtx.drawImage(video, 0, 0, sw, sh);
+      const frame = scanCtx.getImageData(0, 0, sw, sh);
+      const data = frame.data;
+      const boxes = [];
+
+      if (prevFrameData) {
+        // Поиск пятен контраста и движения по сетке
+        const step = 8;
+        for (let y = 0; y < sh; y += step) {
+          for (let x = 0; x < sw; x += step) {
+            const idx = (y * sw + x) * 4;
+            const diff = Math.abs(data[idx] - prevFrameData[idx]) +
+                         Math.abs(data[idx+1] - prevFrameData[idx+1]) +
+                         Math.abs(data[idx+2] - prevFrameData[idx+2]);
+
+            // Если обнаружен объект в движении или сильный контраст
+            if (diff > 75) {
+              boxes.push({
+                x: (x / sw) * w,
+                y: (y / sh) * h,
+                w: (step / sw) * w * 2.2,
+                h: (step / sh) * h * 2.2,
+                tag: "OBJ_MOTION"
+              });
+            }
           }
         }
-        // Запрос детекции 30 раз в секунду
-        setTimeout(sendFrame, 33);
       }
 
-      sendFrame();
+      prevFrameData = data;
+      // Ограничиваем количество блоков, чтобы не перегружать экран
+      return boxes.slice(0, 6);
     }
 
     /* -------------------------------------------------------------
-       3. ФУНКЦИЯ ОТРИСОВКИ ТРЕКИНГ-БЛОКА НА ТОЧКЕ ЛИЦА
+       4. ОТРИСОВКА ФИОЛЕТОВЫХ ГЛИТЧ-БЛОКОВ С РАМКАМИ (КАК В ВИДЕО)
        ------------------------------------------------------------- */
-    function drawGlitchBlock(x, y, w, h) {
-      // 1. Фиолетовая заливка (ядовито-пурпурная, как в видео)
-      ctx.fillStyle = 'rgba(168, 15, 200, 0.85)';
-      ctx.fillRect(x - w / 2, y - h / 2, w, h);
+    function drawObjectBox(x, y, bw, bh, label = "TARGET") {
+      // 1. Пурпурно-фиолетовая заливка
+      ctx.fillStyle = 'rgba(168, 15, 200, 0.82)';
+      ctx.fillRect(x, y, bw, bh);
 
-      // 2. Белая рамка сжатия
+      // 2. Яркая белая контурная обводка
       ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+      ctx.lineWidth = 1.8;
+      ctx.strokeRect(x, y, bw, bh);
 
-      // 3. Внутренняя рамка макроблока
-      if (w > 30) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.strokeRect(x - w / 2 + 3, y - h / 2 + 3, w - 6, h - 6);
+      // 3. Внутренний макроблок (эффект сжатия)
+      if (bw > 40 && bh > 40) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.strokeRect(x + 4, y + 4, bw - 8, bh - 8);
       }
+
+      // 4. Текстовая метка объекта в стиле Webcore
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(`[${label.toUpperCase()}]`, x + 5, y - 6 > 15 ? y - 6 : y + 15);
     }
 
     /* -------------------------------------------------------------
-       4. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА НА CANVAS
+       5. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА (BLUR, COLOR, DATAMOSH)
        ------------------------------------------------------------- */
     function renderLoop() {
       const w = canvas.width;
       const h = canvas.height;
 
       if (video.readyState >= 2) {
-        // --- ЭФФЕКТ ШЛЕЙФА / БЛЮРА (MOTION BLUR) ---
-        ctx.globalAlpha = 0.75;
+        // --- MOTION BLUR / ШЛЕЙФ ДВИЖЕНИЯ ---
+        ctx.globalAlpha = 0.74;
         ctx.drawImage(video, 0, 0, w, h);
         ctx.globalAlpha = 1.0;
 
-        // --- ОКРАШИВАНИЕ В ФИОЛЕТОВЫЙ (WEBCORE COLOR TINT) ---
+        // --- ОКРАШИВАНИЕ В ФИОЛЕТОВЫЙ (COLOR TINT) ---
         ctx.save();
         ctx.globalCompositeOperation = 'color';
-        ctx.fillStyle = 'rgba(147, 51, 234, 0.5)';
+        ctx.fillStyle = 'rgba(150, 20, 220, 0.45)';
         ctx.fillRect(0, 0, w, h);
         ctx.restore();
 
-        // --- СТРОГИЙ ТРЕКИНГ КВАДРАТОВ ПО ЛИЦУ ---
-        // Рисуется ТОЛЬКО тогда, когда нейросеть реально держит лицо
-        if (detectedFaces.length > 0) {
-          for (const landmarks of detectedFaces) {
-            /* Ключевые точки лица:
-               33: Левый глаз
-               263: Правый глаз
-               168: Переносица
-               13: Верхняя губа
-               14: Нижняя губа
-               10: Верхняя граница лба
-               152: Подбородок
-               234, 454: Левая и правая скулы */
-            
-            // Расстояние между глазами для масштаба квадратиков
-            const eyeDist = Math.hypot(
-              (landmarks[263].x - landmarks[33].x) * w,
-              (landmarks[263].y - landmarks[33].y) * h
-            );
-
-            // 1. Блок на левом глазу
-            const leftEye = landmarks[33];
-            drawGlitchBlock(leftEye.x * w, leftEye.y * h, eyeDist * 0.7, eyeDist * 0.5);
-
-            // 2. Блок на правом глазу
-            const rightEye = landmarks[263];
-            drawGlitchBlock(rightEye.x * w, rightEye.y * h, eyeDist * 0.7, eyeDist * 0.5);
-
-            // 3. Блок на рту
-            const mouth = landmarks[13];
-            drawGlitchBlock(mouth.x * w, mouth.y * h, eyeDist * 0.9, eyeDist * 0.45);
-
-            // 4. Большой блок на лобной зоне
-            const forehead = landmarks[10];
-            drawGlitchBlock(forehead.x * w, forehead.y * h, eyeDist * 1.2, eyeDist * 0.6);
-
-            // 5. Контурная фиолетовая сетка подбородка и скул
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            const oval = [234, 152, 454];
-            oval.forEach((id, i) => {
-              const pt = landmarks[id];
-              if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
-              else ctx.lineTo(pt.x * w, pt.y * h);
-            });
-            ctx.stroke();
-
-            // 6. Datamosh-срез, следующий за уровнем глаз
-            if (Math.random() < 0.6) {
-              const sliceY = Math.floor(leftEye.y * h - 20);
-              const sliceH = Math.floor(eyeDist * 0.4);
-              const shift = (Math.random() - 0.5) * 50;
-              ctx.drawImage(canvas, 0, sliceY, w, sliceH, shift, sliceY, w, sliceH);
-            }
+        // 1. ТРЕКИНГ РАСПОЗНАННЫХ AI-ОБЪЕКТОВ (Предметы, техника, окружение)
+        let totalTracked = 0;
+        if (aiDetections.length > 0) {
+          totalTracked += aiDetections.length;
+          for (const det of aiDetections) {
+            const [bx, by, bw, bh] = det.bbox;
+            drawObjectBox(bx, by, bw, bh, det.class);
           }
+        }
+
+        // 2. ОПТИЧЕСКИЙ ТРЕКИНГ (Для деревьев, веток, ландшафта на улице)
+        const opticalObjects = detectOpticalObjects(w, h);
+        totalTracked += opticalObjects.length;
+        for (const obj of opticalObjects) {
+          drawObjectBox(obj.x, obj.y, obj.w, obj.h, "DATA_BLOCK");
+        }
+
+        // Индикатор количества захваченных объектов
+        if (hud) {
+          hud.innerText = `TRACKING: ${totalTracked} OBJECTS // ACTIVE`;
+        }
+
+        // 3. СРЕЗЫ ДАТАМОШИНГА (СДВИГ ПОЛОС)
+        if (Math.random() < 0.4) {
+          const sliceH = Math.floor(Math.random() * 50) + 15;
+          const sliceY = Math.floor(Math.random() * (h - sliceH));
+          const offset = (Math.random() - 0.5) * 45;
+          ctx.drawImage(canvas, 0, sliceY, w, sliceH, offset, sliceY, w, sliceH);
         }
       }
 
       requestAnimationFrame(renderLoop);
     }
 
-    // Запуск при загрузке страницы
-    window.addEventListener('DOMContentLoaded', startCamera);
+    window.addEventListener('DOMContentLoaded', initCamera);
   </script>
 </body>
 </html>
