@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>WEBCORE // ANY OBJECT TRACKING</title>
+  <title>CONFIDENCE BOOSTER // HUD</title>
   
   <style>
     * {
@@ -11,8 +11,9 @@
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: #000;
-      font-family: monospace;
+      background: #090a0f;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      user-select: none;
     }
 
     body {
@@ -23,252 +24,377 @@
       justify-content: center;
     }
 
-    #canvas {
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      filter: contrast(135%) saturate(160%);
+    /* Окно терминала как в видео */
+    .app-window {
+      position: relative;
+      width: 95vw;
+      max-width: 960px;
+      height: 85vh;
+      max-height: 560px;
+      border: 2px solid #27272a;
+      border-radius: 8px;
+      background: #000;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+      overflow: hidden;
     }
 
-    #hud {
+    /* Верхняя панель окна */
+    .window-header {
+      height: 28px;
+      background: #18181b;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      font-size: 11px;
+      color: #a1a1aa;
+      border-bottom: 1px solid #27272a;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 6px;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #eab308; }
+    .dot-green { background: #22c55e; }
+
+    /* Холст с видеопотоком */
+    #hud_canvas {
+      width: 100%;
+      height: calc(100% - 28px);
+      object-fit: cover;
+    }
+
+    /* Всплывающее окно с мемом справа */
+    #meme_popup {
       position: absolute;
-      top: 14px;
-      left: 14px;
-      font-size: 13px;
+      right: 20px;
+      bottom: 25px;
+      width: 260px;
+      height: 260px;
+      border: 3px solid #22c55e;
+      border-radius: 8px;
+      background: #000;
+      box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 50;
+      animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    @keyframes popIn {
+      from { transform: scale(0.6) translateY(40px); opacity: 0; }
+      to { transform: scale(1) translateY(0); opacity: 1; }
+    }
+
+    #meme_img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .meme-tag {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      background: rgba(0, 0, 0, 0.75);
+      color: #22c55e;
+      font-size: 10px;
       font-weight: bold;
-      color: #ff0055;
-      background: rgba(10, 0, 20, 0.85);
-      padding: 8px 14px;
-      border-left: 4px solid #d946ef;
-      z-index: 100;
-      pointer-events: none;
-      text-transform: uppercase;
+      padding: 3px 6px;
+      border: 1px solid #22c55e;
       letter-spacing: 1px;
     }
 
-    #video {
-      display: none;
-    }
+    #webcam { display: none; }
   </style>
 
-  <!-- Подключение TensorFlow.js и детектора любых объектов COCO-SSD -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  <!-- Быстрый CDN MediaPipe Face Mesh -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
-  <div id="hud">SYSTEM BOOT // CAMERA INIT...</div>
-  <video id="video" playsinline></video>
-  <canvas id="canvas"></canvas>
+
+  <div class="app-window">
+    <div class="window-header">
+      <div class="window-dots">
+        <div class="dot dot-red"></div>
+        <div class="dot dot-yellow"></div>
+        <div class="dot dot-green"></div>
+      </div>
+      <div>confidence_booster.py — [LIVE]</div>
+      <div>v2.4</div>
+    </div>
+
+    <video id="webcam" playsinline autoplay muted></video>
+    <canvas id="hud_canvas"></canvas>
+
+    <!-- Окно бустера с мемом -->
+    <div id="meme_popup">
+      <div class="meme-tag">🔥 BOOST ACTIVATED</div>
+      <img id="meme_img" src="" alt="Meme" />
+    </div>
+  </div>
 
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    /* =============================================================
+       СПИСОК КАРТИНОК / МЕМОВ
+       Сюда можно прописать свои картинки из папки на GitHub:
+       Например: ['sigma.jpg', 'patrick.png', 'gigachad.gif']
+       ============================================================= */
+    const MEME_LIST = [
+      "https://media.giphy.com/media/CAYVZA5NRb529kKQUc/giphy.gif", // Gigachad
+      "https://media.giphy.com/media/kwcRp24WepU5G/giphy.gif",      // Patrick Bateman
+      "https://media.giphy.com/media/xoHntNXFYkfzIZ816v/giphy.gif"  // Ryan Gosling
+    ];
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('hud_canvas');
     const ctx = canvas.getContext('2d');
-    const hud = document.getElementById('hud');
+    const popup = document.getElementById('meme_popup');
+    const memeImg = document.getElementById('meme_img');
 
-    // Вспомогательный маленький холст для быстрого оптического анализа контуров (60 FPS)
-    const scanCanvas = document.createElement('canvas');
-    const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
-    scanCanvas.width = 120;
-    scanCanvas.height = 68;
-
-    let objectModel = null;
-    let aiDetections = [];
+    let faceBox = null;
+    let isTriggered = false;
+    let triggerTimer = null;
     let isDetecting = false;
-    let prevFrameData = null;
 
     /* -------------------------------------------------------------
-       1. ПОДКЛЮЧЕНИЕ ОСНОВНОЙ КАМЕРЫ
+       1. СТАБИЛЬНАЯ ФРОНТАЛЬНАЯ КАМЕРА
        ------------------------------------------------------------- */
-    async function initCamera() {
+    async function startWebcam() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: "environment" }, // Задняя камера
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+            facingMode: "user", // Фронтальная камера
+            width: { ideal: 960 },
+            height: { ideal: 540 }
           },
           audio: false
         });
 
         video.srcObject = stream;
-        
-        await new Promise((resolve) => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve();
-          };
-        });
+        await new Promise(r => video.onloadedmetadata = r);
+        video.play();
 
-        canvas.width = video.videoWidth || 1280;
-        canvas.height = video.videoHeight || 720;
+        canvas.width = video.videoWidth || 960;
+        canvas.height = video.videoHeight || 540;
 
-        hud.innerText = "CAMERA ACTIVE // LOADING OBJECT AI...";
-        
-        // Запуск AI-модели детекции объектов
-        loadAIModel();
-
-        // Запуск визуального рендера
+        initFaceMesh();
         requestAnimationFrame(renderLoop);
       } catch (err) {
-        hud.innerText = `CAMERA_ERR: ${err.message}`;
-        hud.style.color = "red";
+        alert("Камера недоступна или заблокирована: " + err.message);
       }
     }
 
     /* -------------------------------------------------------------
-       2. ЗАГРУЗКА AI-МОДЕЛИ ДЛЯ ЛЮБЫХ ОБЪЕКТОВ (COCO-SSD)
+       2. БЫСТРЫЙ И ЛЕГКИЙ FACE MESH (БЕЗ ЛАГОВ)
        ------------------------------------------------------------- */
-    async function loadAIModel() {
-      try {
-        objectModel = await cocoSsd.load();
-        hud.innerText = "SYSTEM ACTIVE // TRACKING ANY OBJECTS";
-        hud.style.color = "#00ff66";
-        startAIDetectionLoop();
-      } catch (e) {
-        console.warn("AI Model load warning, using optical tracking:", e);
-        hud.innerText = "CV OPTICAL TRACKING ACTIVE";
-        hud.style.color = "#d946ef";
-      }
-    }
+    function initFaceMesh() {
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
 
-    async function startAIDetectionLoop() {
-      if (objectModel && video.readyState >= 2 && !isDetecting) {
-        isDetecting = true;
-        try {
-          const predictions = await objectModel.detect(video);
-          // Фильтруем распознанные объекты с уверенностью от 40%
-          aiDetections = predictions.filter(p => p.score > 0.4);
-        } catch (err) {
-          console.error(err);
-        } finally {
+      faceMesh.setOptions({
+        maxNumFaces: 1,              // Строго 1 лицо для максимального FPS
+        refineLandmarks: false,      // Выключаем тяжелый расчёт зрачков ради плавности
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults(onFaceMeshResults);
+
+      // Цикл отправки кадров (стабильные 30-40 проверок/сек без просадок)
+      async function detect() {
+        if (video.readyState >= 2 && !isDetecting) {
+          isDetecting = true;
+          try {
+            await faceMesh.send({ image: video });
+          } catch(e) {}
           isDetecting = false;
         }
+        setTimeout(detect, 25);
       }
-      setTimeout(startAIDetectionLoop, 80); // ~12 проверок в секунду
+      detect();
     }
 
     /* -------------------------------------------------------------
-       3. ОПТИЧЕСКИЙ ТРЕКИНГ КОНТУРОВ И ДВИЖЕНИЯ (ДЛЯ ДЕРЕВЬЕВ И ПРИРОДЫ)
+       3. ДЕТЕКТОР ТРИГГЕРА (ОТКРЫЛ РОТ / ПОДНЕС НАПИТОК)
        ------------------------------------------------------------- */
-    function detectOpticalObjects(w, h) {
-      const sw = scanCanvas.width;
-      const sh = scanCanvas.height;
-      scanCtx.drawImage(video, 0, 0, sw, sh);
-      const frame = scanCtx.getImageData(0, 0, sw, sh);
-      const data = frame.data;
-      const boxes = [];
-
-      if (prevFrameData) {
-        // Поиск пятен контраста и движения по сетке
-        const step = 8;
-        for (let y = 0; y < sh; y += step) {
-          for (let x = 0; x < sw; x += step) {
-            const idx = (y * sw + x) * 4;
-            const diff = Math.abs(data[idx] - prevFrameData[idx]) +
-                         Math.abs(data[idx+1] - prevFrameData[idx+1]) +
-                         Math.abs(data[idx+2] - prevFrameData[idx+2]);
-
-            // Если обнаружен объект в движении или сильный контраст
-            if (diff > 75) {
-              boxes.push({
-                x: (x / sw) * w,
-                y: (y / sh) * h,
-                w: (step / sw) * w * 2.2,
-                h: (step / sh) * h * 2.2,
-                tag: "OBJ_MOTION"
-              });
-            }
-          }
-        }
+    function onFaceMeshResults(results) {
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+        faceBox = null;
+        return;
       }
 
-      prevFrameData = data;
-      // Ограничиваем количество блоков, чтобы не перегружать экран
-      return boxes.slice(0, 6);
+      const lm = results.multiFaceLandmarks[0];
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // Вычисляем габариты лица для прицела
+      let minX = 1, maxX = 0, minY = 1, maxY = 0;
+      for (const p of lm) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+
+      // Добавляем отступы
+      const padX = (maxX - minX) * 0.15;
+      const padY = (maxY - minY) * 0.18;
+
+      faceBox = {
+        x: (minX - padX) * w,
+        y: (minY - padY) * h,
+        w: (maxX - minX + padX * 2) * w,
+        h: (maxY - minY + padY * 2) * h
+      };
+
+      // Расстояние между губами (13 - верхняя губа, 14 - нижняя)
+      const mouthOpen = Math.hypot(
+        (lm[13].x - lm[14].x) * w,
+        (lm[13].y - lm[14].y) * h
+      );
+
+      // Расстояние между глазами для нормировки масштаба
+      const eyeDist = Math.hypot(
+        (lm[33].x - lm[263].x) * w,
+        (lm[33].y - lm[263].y) * h
+      );
+
+      // ТРИГГЕР: рот открыт шире обычного (глоток напитка, жест или удивление)
+      if (mouthOpen / eyeDist > 0.22) {
+        triggerConfidenceBooster();
+      }
     }
 
     /* -------------------------------------------------------------
-       4. ОТРИСОВКА ФИОЛЕТОВЫХ ГЛИТЧ-БЛОКОВ С РАМКАМИ (КАК В ВИДЕО)
+       4. АКТИВАЦИЯ БУСТЕРА
        ------------------------------------------------------------- */
-    function drawObjectBox(x, y, bw, bh, label = "TARGET") {
-      // 1. Пурпурно-фиолетовая заливка
-      ctx.fillStyle = 'rgba(168, 15, 200, 0.82)';
-      ctx.fillRect(x, y, bw, bh);
+    function triggerConfidenceBooster() {
+      if (isTriggered) return;
+      isTriggered = true;
 
-      // 2. Яркая белая контурная обводка
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.8;
-      ctx.strokeRect(x, y, bw, bh);
+      // Выбираем случайный мем из списка
+      const randomMeme = MEME_LIST[Math.floor(Math.random() * MEME_LIST.length)];
+      memeImg.src = randomMeme;
+      popup.style.display = 'flex';
 
-      // 3. Внутренний макроблок (эффект сжатия)
-      if (bw > 40 && bh > 40) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-        ctx.strokeRect(x + 4, y + 4, bw - 8, bh - 8);
-      }
-
-      // 4. Текстовая метка объекта в стиле Webcore
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 11px monospace';
-      ctx.fillText(`[${label.toUpperCase()}]`, x + 5, y - 6 > 15 ? y - 6 : y + 15);
+      // Окно держится 3 секунды, затем возвращается в режим поиска
+      clearTimeout(triggerTimer);
+      triggerTimer = setTimeout(() => {
+        popup.style.display = 'none';
+        isTriggered = false;
+      }, 3000);
     }
 
     /* -------------------------------------------------------------
-       5. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА (BLUR, COLOR, DATAMOSH)
+       5. ОТРИСОВКА ТАКТИЧЕСКОГО HUD ИЗ ВИДЕО
        ------------------------------------------------------------- */
+    function drawCornerBracket(x, y, w, h, size = 18) {
+      ctx.strokeStyle = '#22c55e'; // Яркий зелёный цвет прицела
+      ctx.lineWidth = 3;
+
+      // Верх-лево
+      ctx.beginPath();
+      ctx.moveTo(x, y + size); ctx.lineTo(x, y); ctx.lineTo(x + size, y);
+      ctx.stroke();
+
+      // Верх-право
+      ctx.beginPath();
+      ctx.moveTo(x + w - size, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + size);
+      ctx.stroke();
+
+      // Низ-лево
+      ctx.beginPath();
+      ctx.moveTo(x, y + h - size); ctx.lineTo(x, y + h); ctx.lineTo(x + size, y + h);
+      ctx.stroke();
+
+      // Низ-право
+      ctx.beginPath();
+      ctx.moveTo(x + w - size, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - size);
+      ctx.stroke();
+    }
+
     function renderLoop() {
       const w = canvas.width;
       const h = canvas.height;
 
       if (video.readyState >= 2) {
-        // --- MOTION BLUR / ШЛЕЙФ ДВИЖЕНИЯ ---
-        ctx.globalAlpha = 0.74;
-        ctx.drawImage(video, 0, 0, w, h);
-        ctx.globalAlpha = 1.0;
-
-        // --- ОКРАШИВАНИЕ В ФИОЛЕТОВЫЙ (COLOR TINT) ---
         ctx.save();
-        ctx.globalCompositeOperation = 'color';
-        ctx.fillStyle = 'rgba(150, 20, 220, 0.45)';
-        ctx.fillRect(0, 0, w, h);
+
+        // 1. Отражаем по горизонтали (Зеркало для фронталки)
+        ctx.translate(w, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, w, h);
         ctx.restore();
 
-        // 1. ТРЕКИНГ РАСПОЗНАННЫХ AI-ОБЪЕКТОВ (Предметы, техника, окружение)
-        let totalTracked = 0;
-        if (aiDetections.length > 0) {
-          totalTracked += aiDetections.length;
-          for (const det of aiDetections) {
-            const [bx, by, bw, bh] = det.bbox;
-            drawObjectBox(bx, by, bw, bh, det.class);
-          }
+        // 2. Рамка-прицел на лице (с поправкой на зеркальное отражение)
+        if (faceBox) {
+          const mirroredX = w - faceBox.x - faceBox.w;
+          drawCornerBracket(mirroredX, faceBox.y, faceBox.w, faceBox.h);
+
+          // Метка под лицом
+          ctx.fillStyle = '#22c55e';
+          ctx.font = 'bold 12px monospace';
+          ctx.fillText('TARGET_LOCKED', mirroredX + 6, faceBox.y + faceBox.h + 16);
         }
 
-        // 2. ОПТИЧЕСКИЙ ТРЕКИНГ (Для деревьев, веток, ландшафта на улице)
-        const opticalObjects = detectOpticalObjects(w, h);
-        totalTracked += opticalObjects.length;
-        for (const obj of opticalObjects) {
-          drawObjectBox(obj.x, obj.y, obj.w, obj.h, "DATA_BLOCK");
-        }
+        // 3. Элементы HUD из видео:
+        // [REC / LIVE] в левом углу
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(25, 25, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 13px monospace';
+        ctx.fillText('LIVE', 38, 29);
 
-        // Индикатор количества захваченных объектов
-        if (hud) {
-          hud.innerText = `TRACKING: ${totalTracked} OBJECTS // ACTIVE`;
-        }
+        // Таймкод внизу
+        const now = new Date();
+        const tc = `00:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}:${String(Math.floor(now.getMilliseconds()/10)).padStart(2, '0')}`;
+        ctx.fillStyle = '#22c55e';
+        ctx.font = '12px monospace';
+        ctx.fillText(`REC: ${tc}`, 20, h - 20);
 
-        // 3. СРЕЗЫ ДАТАМОШИНГА (СДВИГ ПОЛОС)
-        if (Math.random() < 0.4) {
-          const sliceH = Math.floor(Math.random() * 50) + 15;
-          const sliceY = Math.floor(Math.random() * (h - sliceH));
-          const offset = (Math.random() - 0.5) * 45;
-          ctx.drawImage(canvas, 0, sliceY, w, sliceH, offset, sliceY, w, sliceH);
+        // 4. ТАКТИЧЕСКИЙ РАДАР В ПРАВОМ ВЕРХНЕМ УГЛУ
+        const radarX = w - 150;
+        const radarY = 20;
+        const radarW = 130;
+        const radarH = 80;
+
+        ctx.strokeStyle = isTriggered ? '#22c55e' : '#52525b';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(radarX, radarY, radarW, radarH);
+
+        // Прицельная сетка в радаре
+        ctx.beginPath();
+        ctx.moveTo(radarX + radarW/2, radarY + 10);
+        ctx.lineTo(radarX + radarW/2, radarY + radarH - 10);
+        ctx.moveTo(radarX + 15, radarY + radarH/2);
+        ctx.lineTo(radarX + radarW - 15, radarY + radarH/2);
+        ctx.stroke();
+
+        // Статус радара
+        ctx.fillStyle = isTriggered ? '#22c55e' : '#a1a1aa';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        if (isTriggered) {
+          ctx.fillText('MATCHED! 🔥', radarX + radarW/2, radarY + radarH/2 + 4);
+        } else {
+          ctx.fillText('SEARCHING...', radarX + radarW/2, radarY + radarH/2 + 4);
         }
+        ctx.textAlign = 'left';
       }
 
       requestAnimationFrame(renderLoop);
     }
 
-    window.addEventListener('DOMContentLoaded', initCamera);
+    window.addEventListener('DOMContentLoaded', startWebcam);
   </script>
 </body>
 </html>
