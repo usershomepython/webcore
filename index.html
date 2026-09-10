@@ -59,8 +59,9 @@ const modeName = document.getElementById('modeName');
 
 // ---------- Размер холста под весь экран (с учётом реального разрешения камеры) ----------
 let srcW = 640, srcH = 480; // обновится, когда видео отдаст реальный размер
+const DPR = 1; // фиксируем DPR=1 везде: retina-разрешение почти не даёт видимой пользы тут, но сильно бьёт по FPS
 function fitCanvasToScreen(){
-  const dpr = Math.min(window.devicePixelRatio || 1, 2); // ограничиваем DPR ради производительности
+  const dpr = DPR;
   const cssW = window.innerWidth, cssH = window.innerHeight;
   canvas.style.width = cssW + 'px';
   canvas.style.height = cssH + 'px';
@@ -71,8 +72,10 @@ function fitCanvasToScreen(){
 window.addEventListener('resize', fitCanvasToScreen);
 fitCanvasToScreen();
 
-// Offscreen-буфер держим в разрешении исходного видео (дешевле, чем в разрешении экрана),
-// а на экран растягиваем через drawImage.
+// Offscreen-буфер для фильтров держим НАМНОГО меньше разрешения видео — попиксельные
+// фильтры (edge, rainbow-wave, thermal и т.п.) на 720p очень дорогие на слабых
+// телефонах. Считаем на маленьком буфере, потом растягиваем через drawImage (дёшево, GPU).
+const FILTER_MAX_W = 240; // ширина буфера обработки фильтров в пикселях
 const off = document.createElement('canvas');
 const octx = off.getContext('2d', {alpha:false, willReadFrequently:true});
 // Переиспользуемый маленький канвас для pixelate/blur (не создаём заново каждый кадр)
@@ -106,8 +109,8 @@ function px(lm){
 }
 // Вычисляет смещение/масштаб как при object-fit: cover для видео srcW×srcH в canvas cw×ch
 function coverTransform(){
-  const cw = canvas.width / (window.devicePixelRatio ? Math.min(window.devicePixelRatio,2) : 1);
-  const ch = canvas.height / (window.devicePixelRatio ? Math.min(window.devicePixelRatio,2) : 1);
+  const cw = canvas.width / DPR;
+  const ch = canvas.height / DPR;
   const scale = Math.max(cw/srcW, ch/srcH);
   const dw = srcW*scale, dh = srcH*scale;
   const dx = (cw-dw)/2, dy = (ch-dh)/2;
@@ -192,8 +195,7 @@ function tickFps(){
 function onResults(res){
   if(loadingEl.style.display!=='none'){ loadingEl.style.display='none'; }
 
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const cw = canvas.width/dpr, ch = canvas.height/dpr;
+  const cw = canvas.width/DPR, ch = canvas.height/DPR;
   ctx.clearRect(0,0,cw,ch);
 
   // Рисуем видео на весь экран, имитируя object-fit: cover
@@ -253,7 +255,7 @@ function onResults(res){
 const handsModel = new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
 handsModel.setOptions({
   maxNumHands:2,
-  modelComplexity:1,
+  modelComplexity:0, // облегчённая модель — заметно быстрее на мобильных, точность чуть ниже
   minDetectionConfidence:0.6,
   minTrackingConfidence:0.6
 });
@@ -262,9 +264,13 @@ handsModel.onResults(onResults);
 // Запрашиваем камеру напрямую с хорошим разрешением и передней/задней камерой на выбор,
 // чтобы получить максимум качества, которое реально может дать устройство.
 let processing = false;
+let lastSend = 0;
+const DETECT_INTERVAL = 66; // ~15 распознаваний/сек — этого достаточно для жестов, но не грузит CPU каждый rAF
 async function frameLoop(){
-  if(video.readyState >= 2 && !processing){
+  const now = performance.now();
+  if(video.readyState >= 2 && !processing && now-lastSend >= DETECT_INTERVAL){
     processing = true;
+    lastSend = now;
     try{ await handsModel.send({image: video}); }
     catch(e){ /* игнорируем единичные сбои кадра */ }
     processing = false;
@@ -276,7 +282,7 @@ async function startCamera(){
   // Пытаемся с фронтальной камерой и хорошим разрешением; если что-то не даёт —
   // откатываемся на более простые constraints, чтобы не ловить NotReadableError/OverconstrainedError.
   const attempts = [
-    {audio:false, video:{facingMode:'user', width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30,max:30}}},
+    {audio:false, video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:24,max:30}}},
     {audio:false, video:{facingMode:'user'}},
     {audio:false, video:true}
   ];
@@ -294,7 +300,8 @@ async function startCamera(){
 
   srcW = video.videoWidth || 1280;
   srcH = video.videoHeight || 720;
-  off.width = srcW; off.height = srcH;
+  off.width = FILTER_MAX_W;
+  off.height = Math.round(FILTER_MAX_W * (srcH/srcW));
 
   // ВАЖНО: не используем Camera() из camera_utils.js — она сама вызывает getUserMedia
   // на этом же <video>, а второй одновременный запрос к камере даёт NotReadableError
