@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaPipe Face Mesh AR Overlay</title>
+  
+  <style>
+    /* -------------------------------------------------------------
+       1. СТИЛИ ИНТЕРФЕЙСА
+       ------------------------------------------------------------- */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #121214;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .container {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* Холст, на который выводится зеркальное изображение и графика */
+    #output_canvas {
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      background-color: #000000;
+      max-width: 95vw;
+      max-height: 80vh;
+      object-fit: contain;
+    }
+
+    /* Индикатор статуса загрузки модели */
+    #status {
+      font-size: 14px;
+      color: #9ca3af;
+      padding: 6px 14px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      transition: color 0.3s;
+    }
+
+    /* Скрытый видеоэлемент — источник кадров для FaceMesh */
+    #input_video {
+      display: none;
+    }
+  </style>
+
+  <!-- -------------------------------------------------------------
+       2. ПОДКЛЮЧЕНИЕ MEDIAPIPE ЧЕРЕЗ CDN
+       ------------------------------------------------------------- -->
+  <!-- Утилита для удобной работы с потоком веб-камеры -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <!-- Основная библиотека отслеживания лицевых ориентиров (Face Mesh) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div class="container">
+    <div id="status">Инициализация веб-камеры и загрузка нейросети...</div>
+    
+    <!-- Видеопоток с камеры (скрыт, используется как сырые данные) -->
+    <video id="input_video" playsinline></video>
+    
+    <!-- Холст для финального рендеринга видео + AR-объекта -->
+    <canvas id="output_canvas" width="1280" height="720"></canvas>
+  </div>
+
+  <script>
+    /* -------------------------------------------------------------
+       3. ИНИЦИАЛИЗАЦИЯ DOM-ЭЛЕМЕНТОВ И CANVAS КОНТЕКСТА
+       ------------------------------------------------------------- */
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const statusElement = document.getElementById('status');
+
+    let isFirstDetection = true;
+
+    /* -------------------------------------------------------------
+       4. ФУНКЦИЯ ОТРИСОВКИ ВИРТУАЛЬНОГО ОБЪЕКТА (ОЧКОВ)
+       ------------------------------------------------------------- */
+    /**
+     * Отрисовывает процедурные солнцезащитные очки с учетом положения и наклона лица.
+     * @param {CanvasRenderingContext2D} ctx - Контекст рисования
+     * @param {Object} center - Точка переносицы {x, y} в пикселях
+     * @param {number} angle - Угол наклона головы (в радианах)
+     * @param {number} eyeDistance - Расстояние между внешними уголками глаз в пикселях (для масштабирования)
+     */
+    function drawVirtualGlasses(ctx, center, angle, eyeDistance) {
+      ctx.save();
+
+      // Переносим начало координат в точку переносицы и поворачиваем холст по углу наклона головы
+      ctx.translate(center.x, center.y);
+      ctx.rotate(angle);
+
+      // Масштабируем очки пропорционально расстоянию между глазами
+      const baseWidth = 200; // Базовая ширина модели очков
+      const scale = (eyeDistance * 1.35) / baseWidth;
+      ctx.scale(scale, scale);
+
+      // Параметры оправы и линз
+      const lensWidth = 70;
+      const lensHeight = 45;
+      const eyeOffset = 45; // Смещение центра линзы относительно переносицы
+
+      // Функция отрисовки контура линзы (форма "Wayfarer" со скруглением)
+      function drawLensShape(x, y, w, h) {
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, y - h / 2, w, h, [10, 10, 20, 20]);
+      }
+
+      // 1. Отрисовка дужек очков
+      ctx.strokeStyle = '#1a1a1a';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(-eyeOffset - lensWidth / 2, -5);
+      ctx.lineTo(-eyeOffset - lensWidth / 2 - 25, -12);
+      ctx.moveTo(eyeOffset + lensWidth / 2, -5);
+      ctx.lineTo(eyeOffset + lensWidth / 2 + 25, -12);
+      ctx.stroke();
+
+      // 2. Отрисовка переносицы оправы
+      ctx.beginPath();
+      ctx.lineWidth = 6;
+      ctx.moveTo(-eyeOffset + lensWidth / 2, -5);
+      ctx.quadraticCurveTo(0, -12, eyeOffset - lensWidth / 2, -5);
+      ctx.stroke();
+
+      // 3. Отрисовка левой и правой линз (с градиентным затемнением)
+      [-eyeOffset, eyeOffset].forEach((offset) => {
+        // Оправа вокруг линзы
+        drawLensShape(offset, 0, lensWidth + 6, lensHeight + 6);
+        ctx.fillStyle = '#111827';
+        ctx.fill();
+
+        // Сама линза с полупрозрачным градиентом
+        drawLensShape(offset, 0, lensWidth, lensHeight);
+        const gradient = ctx.createLinearGradient(offset, -lensHeight / 2, offset, lensHeight / 2);
+        gradient.addColorStop(0, 'rgba(30, 27, 75, 0.92)');   // Темный индиго сверху
+        gradient.addColorStop(1, 'rgba(236, 72, 153, 0.75)'); // Розовый отблеск снизу
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // Световой блик на стекле (реалистичный акцент)
+        ctx.save();
+        ctx.clip(); // Ограничиваем блик формой линзы
+        ctx.beginPath();
+        ctx.moveTo(offset - 25, -lensHeight / 2);
+        ctx.lineTo(offset - 10, -lensHeight / 2);
+        ctx.lineTo(offset - 25, lensHeight / 2);
+        ctx.lineTo(offset - 40, lensHeight / 2);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.fill();
+        ctx.restore();
+      });
+
+      ctx.restore();
+    }
+
+    /* -------------------------------------------------------------
+       5. ОБРАБОТЧИК КАЖДОГО КАДРА (ON RESULTS)
+       ------------------------------------------------------------- */
+    function onResults(results) {
+      if (isFirstDetection) {
+        statusElement.innerText = "Трекинг активен. Лицо обнаружено!";
+        statusElement.style.color = "#4ade80";
+        isFirstDetection = false;
+      }
+
+      // Сохраняем состояние контекста
+      canvasCtx.save();
+
+      // Очищаем canvas перед отрисовкой нового кадра
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+      /* ЗЕРКАЛЬНЫЙ РЕЖИМ (Селфи):
+         Отражаем холст по горизонтали, чтобы движения пользователя совпадали с зеркалом */
+      canvasCtx.translate(canvasElement.width, 0);
+      canvasCtx.scale(-1, 1);
+
+      // Отрисовываем исходный кадр видеопотока
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      // Если в кадре найдены ключевые точки лица
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const landmarks = results.multiFaceLandmarks[0];
+
+        /* Ключевые точки MediaPipe Face Mesh:
+           - 33: Внешний край левого глаза
+           - 263: Внешний край правого глаза
+           - 168: Точка на переносице между глазами
+           Координаты возвращаются нормализованными [0.0 ... 1.0], переводим их в пиксели */
+        const leftEyeOuter = {
+          x: landmarks[33].x * canvasElement.width,
+          y: landmarks[33].y * canvasElement.height
+        };
+        const rightEyeOuter = {
+          x: landmarks[263].x * canvasElement.width,
+          y: landmarks[263].y * canvasElement.height
+        };
+        const noseBridge = {
+          x: landmarks[168].x * canvasElement.width,
+          y: landmarks[168].y * canvasElement.height
+        };
+
+        // Вычисляем угол наклона головы относительно горизонтали
+        const deltaX = rightEyeOuter.x - leftEyeOuter.x;
+        const deltaY = rightEyeOuter.y - leftEyeOuter.y;
+        const angle = Math.atan2(deltaY, deltaX);
+
+        // Вычисляем расстояние между внешними углами глаз (масштаб)
+        const eyeDistance = Math.hypot(deltaX, deltaY);
+
+        // Накладываем виртуальные очки
+        drawVirtualGlasses(canvasCtx, noseBridge, angle, eyeDistance);
+      }
+
+      // Восстанавливаем трансформации холста
+      canvasCtx.restore();
+    }
+
+    /* -------------------------------------------------------------
+       6. НАСТРОЙКА И КОНФИГУРАЦИЯ MEDIAPIPE FACE MESH
+       ------------------------------------------------------------- */
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 1,              // Отслеживаем одно лицо для максимальной производительности
+      refineLandmarks: true,       // Дополнительная детализация вокруг глаз и губ
+      minDetectionConfidence: 0.5, // Порог уверенности для обнаружения
+      minTrackingConfidence: 0.5   // Порог уверенности для трекинга между кадрами
+    });
+
+    faceMesh.onResults(onResults);
+
+    /* -------------------------------------------------------------
+       7. ЗАПУСК КАМЕРЫ ЧЕРЕЗ CAMERA_UTILS
+       ------------------------------------------------------------- */
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        // Передаем каждый полученный кадр на обработку в FaceMesh
+        await faceMesh.send({ image: videoElement });
+      },
+      width: 1280,
+      height: 720
+    });
+
+    camera.start().catch((error) => {
+      console.error("Ошибка доступа к веб-камере:", error);
+      statusElement.innerText = "Ошибка: не удалось получить доступ к веб-камере.";
+      statusElement.style.color = "#f87171";
+    });
+  </script>
+</body>
+</html>
