@@ -70,14 +70,20 @@ function fitCanvasToScreen(){
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', fitCanvasToScreen);
+window.addEventListener('orientationchange', ()=>setTimeout(fitCanvasToScreen, 50));
+if(screen.orientation && screen.orientation.addEventListener){
+  screen.orientation.addEventListener('change', ()=>setTimeout(fitCanvasToScreen, 50));
+}
 fitCanvasToScreen();
 
 // Offscreen-буфер для фильтров держим НАМНОГО меньше разрешения видео — попиксельные
 // фильтры (edge, rainbow-wave, thermal и т.п.) на 720p очень дорогие на слабых
 // телефонах. Считаем на маленьком буфере, потом растягиваем через drawImage (дёшево, GPU).
-const FILTER_MAX_W = 240; // ширина буфера обработки фильтров в пикселях
+const FILTER_MAX_W = 160; // ширина буфера обработки фильтров в пикселях (чем меньше, тем быстрее)
 const off = document.createElement('canvas');
 const octx = off.getContext('2d', {alpha:false, willReadFrequently:true});
+let lastFilterRender = 0;
+const FILTER_RENDER_INTERVAL = 90; // пересчитываем сам фильтр не чаще ~11 раз/сек — самая тяжёлая операция
 // Переиспользуемый маленький канвас для pixelate/blur (не создаём заново каждый кадр)
 const small = document.createElement('canvas');
 const sctx = small.getContext('2d');
@@ -195,6 +201,16 @@ function tickFps(){
 function onResults(res){
   if(loadingEl.style.display!=='none'){ loadingEl.style.display='none'; }
 
+  // Реальные размеры кадра могут поменяться при повороте телефона (портрет↔ландшафт) —
+  // читаем их каждый раз, а не только один раз при старте камеры.
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(vw && vh && (vw!==srcW || vh!==srcH)){
+    srcW = vw; srcH = vh;
+    const newOffH = Math.max(1, Math.round(FILTER_MAX_W * (srcH/srcW)));
+    if(off.width!==FILTER_MAX_W) off.width = FILTER_MAX_W;
+    if(off.height!==newOffH) off.height = newOffH;
+  }
+
   const cw = canvas.width/DPR, ch = canvas.height/DPR;
   ctx.clearRect(0,0,cw,ch);
 
@@ -228,7 +244,12 @@ function onResults(res){
   }
 
   if(poly && poly.length>=3){
-    renderFiltered(FILTERS[fi]);
+    const nowMs = performance.now();
+    if(nowMs - lastFilterRender >= FILTER_RENDER_INTERVAL){
+      renderFiltered(FILTERS[fi]);
+      lastFilterRender = nowMs;
+    }
+    // на пропущенных кадрах просто переиспользуем уже посчитанный off-буфер — дёшево
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(poly[0].x, poly[0].y);
@@ -298,10 +319,10 @@ async function startCamera(){
   video.srcObject = stream;
   await video.play();
 
-  srcW = video.videoWidth || 1280;
-  srcH = video.videoHeight || 720;
+  srcW = video.videoWidth || 640;
+  srcH = video.videoHeight || 480;
   off.width = FILTER_MAX_W;
-  off.height = Math.round(FILTER_MAX_W * (srcH/srcW));
+  off.height = Math.max(1, Math.round(FILTER_MAX_W * (srcH/srcW)));
 
   // ВАЖНО: не используем Camera() из camera_utils.js — она сама вызывает getUserMedia
   // на этом же <video>, а второй одновременный запрос к камере даёт NotReadableError
