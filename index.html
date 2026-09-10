@@ -3,114 +3,76 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>webcore // breakcore face tracking</title>
+  <title>BREAKCORE // DATAMOSH GLITCH</title>
   
   <style>
-    /* =============================================================
-       1. СТИЛИ ИНТЕРФЕЙСА (WEBCORE / GLITCHCORE DARK THEME)
-       ============================================================= */
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      user-select: none;
+      overflow: hidden;
+      background: #000;
     }
 
     body {
-      background-color: #05010a;
-      color: #e879f9;
-      font-family: "Courier New", Courier, monospace;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      overflow: hidden;
-    }
-
-    .wrapper {
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
       width: 100vw;
       height: 100vh;
+      display: flex;
+      align-items: center;
       justify-content: center;
     }
 
-    /* Холст с эффектом свечения */
+    /* Холст на весь экран */
     #glitch_canvas {
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       object-fit: cover;
-      filter: contrast(115%) brightness(95%);
+      /* Повышенный контраст и насыщенность как в старых пережатых видео */
+      filter: contrast(160%) saturate(180%) brightness(90%);
     }
 
-    /* Верхний HUD-статус в стиле терминала / аналогового ТВ */
-    #hud {
-      position: absolute;
-      top: 16px;
-      left: 20px;
-      font-size: 13px;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      color: #f43f5e;
-      background: rgba(10, 0, 20, 0.7);
-      padding: 6px 12px;
-      border-left: 3px solid #d946ef;
-      pointer-events: none;
-      z-index: 10;
-      text-shadow: 0 0 8px #f43f5e;
-    }
-
-    /* Невидимый тег видео (источник кадров для MediaPipe) */
-    #raw_video {
+    #video_source {
       display: none;
     }
   </style>
 
-  <!-- =============================================================
-       2. CDN БИБЛИОТЕКИ MEDIAPIPE FACE MESH
-       ============================================================= -->
+  <!-- MediaPipe Face Mesh CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
-  <div class="wrapper">
-    <div id="hud">SYS.INIT // SEARCHING_INPUT...</div>
-    <video id="raw_video" playsinline></video>
-    <canvas id="glitch_canvas"></canvas>
-  </div>
+  <video id="video_source" playsinline></video>
+  <canvas id="glitch_canvas"></canvas>
 
   <script>
-    /* =============================================================
-       3. ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА ПЕРЕМЕННЫХ
-       ============================================================= */
-    const video = document.getElementById('raw_video');
+    const video = document.getElementById('video_source');
     const canvas = document.getElementById('glitch_canvas');
     const ctx = canvas.getContext('2d');
-    const hud = document.getElementById('hud');
 
+    let currentLandmarks = null;
     let isProcessing = false;
-    let frameCount = 0;
 
-    // Палитра в стиле видео (пурпурный, фиолетовый, неоновый белый)
-    const GLITCH_COLORS = [
-      'rgba(168, 85, 247, 0.85)', // Яркий фиолетовый
-      'rgba(217, 70, 239, 0.9)',  // Пурпурный (Magenta)
-      'rgba(112, 26, 117, 0.75)', // Темно-пурпурный (артефакт сжатия)
-      'rgba(255, 255, 255, 0.95)' // Белый шум
-    ];
+    // Массив фиолетовых блоков, которые живут своей жизнью (как артефакты в видео)
+    const persistentBoxes = [];
+    for (let i = 0; i < 18; i++) {
+      persistentBoxes.push({
+        x: Math.random(),
+        y: Math.random(),
+        w: Math.random() * 0.25 + 0.05,
+        h: Math.random() * 0.35 + 0.08,
+        life: Math.floor(Math.random() * 20),
+        color: Math.random() > 0.3 ? 'rgba(147, 20, 180, 0.88)' : 'rgba(85, 0, 120, 0.92)'
+      });
+    }
 
-    /* =============================================================
-       4. ПОДКЛЮЧЕНИЕ ОСНОВНОЙ (ЗАДНЕЙ) КАМЕРЫ ЧЕРЕЗ WEBRTC
-       ============================================================= */
-    async function initCamera() {
+    /* -------------------------------------------------------------
+       1. ПОДКЛЮЧЕНИЕ ОСНОВНОЙ КАМЕРЫ
+       ------------------------------------------------------------- */
+    async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            // Запрашиваем именно заднюю/основную камеру
-            facingMode: { ideal: "environment" },
+            facingMode: { ideal: "environment" }, // Основная задняя камера
             width: { ideal: 1280 },
             height: { ideal: 720 }
           },
@@ -120,170 +82,160 @@
         video.srcObject = stream;
         await video.play();
 
-        // Синхронизируем физический размер холста с разрешением видео
         canvas.width = video.videoWidth || 1280;
         canvas.height = video.videoHeight || 720;
 
-        hud.innerText = "CAMERA: ENVIRONMENT // TRACKING ACTIVE";
-        hud.style.color = "#a855f7";
-
-        // Запуск цикла обработки кадров
-        startProcessingLoop();
-      } catch (err) {
-        console.error("Ошибка камеры:", err);
-        hud.innerText = "CAMERA_ERR: ACCESS DENIED OR MISSING";
-        hud.style.color = "#ef4444";
+        // Запуск параллельного рендеринга
+        requestAnimationFrame(renderLoop);
+        initMediaPipe();
+      } catch (e) {
+        console.error("Ошибка камеры:", e);
       }
     }
 
-    /* =============================================================
-       5. КОНФИГУРАЦИЯ MEDIAPIPE FACE MESH
-       ============================================================= */
-    const faceMesh = new FaceMesh({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-    });
+    /* -------------------------------------------------------------
+       2. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE FACE MESH
+       ------------------------------------------------------------- */
+    function initMediaPipe() {
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
 
-    faceMesh.setOptions({
-      maxNumFaces: 2,              // Отслеживаем до двух лиц в кадре
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
+      faceMesh.setOptions({
+        maxNumFaces: 2,
+        refineLandmarks: false,
+        minDetectionConfidence: 0.4,
+        minTrackingConfidence: 0.4
+      });
 
-    faceMesh.onResults(onResults);
+      faceMesh.onResults((results) => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          currentLandmarks = results.multiFaceLandmarks;
+        } else {
+          currentLandmarks = null;
+        }
+      });
 
-    // Цикл непрерывной передачи кадров в нейросеть
-    function startProcessingLoop() {
-      async function step() {
+      // Передача кадров в FaceMesh
+      async function track() {
         if (video.readyState >= 2 && !isProcessing) {
           isProcessing = true;
           await faceMesh.send({ image: video });
           isProcessing = false;
         }
-        requestAnimationFrame(step);
+        setTimeout(track, 30); // ~30 FPS для детекции
       }
-      requestAnimationFrame(step);
+      track();
     }
 
-    /* =============================================================
-       6. ПРОЦЕДУРНЫЕ GLITCHCORE / BREAKCORE ЭФФЕКТЫ
-       ============================================================= */
+    /* -------------------------------------------------------------
+       3. ГЕНЕРАТОР ГЛИТЧ-КВАДРАТИКОВ (ИЗ ВИДЕО)
+       ------------------------------------------------------------- */
+    function drawGlitchBox(x, y, w, h, fill = 'rgba(160, 20, 200, 0.85)') {
+      // 1. Фиолетовая плашка артефакта
+      ctx.fillStyle = fill;
+      ctx.fillRect(x, y, w, h);
 
-    /**
-     * Эффект смещения полос и артефактов датамошинга (Datamosh slice)
-     */
-    function applyDatamoshSlices(ctx, width, height) {
-      if (Math.random() < 0.45) {
-        const sliceHeight = Math.floor(Math.random() * 40) + 10;
-        const sliceY = Math.floor(Math.random() * (height - sliceHeight));
-        const offset = (Math.random() - 0.5) * 45;
-
-        // Копируем полосу и сдвигаем её по горизонтали
-        ctx.drawImage(canvas, 0, sliceY, width, sliceHeight, offset, sliceY, width, sliceHeight);
-
-        // Иногда заливаем сдвинутую полосу фиолетовым оверлеем
-        if (Math.random() < 0.5) {
-          ctx.fillStyle = 'rgba(192, 38, 211, 0.25)';
-          ctx.fillRect(0, sliceY, width, sliceHeight);
-        }
-      }
-    }
-
-    /**
-     * Отрисовка фиолетовых битых блоков (артефактов сжатия) вокруг точек лица
-     */
-    function drawGlitchBoxes(ctx, landmarks, w, h) {
-      // Ключевые области: глаза (33, 263), рот (13), нос (1), лоб (10)
-      const targetIndices = [33, 263, 13, 1, 10, 234, 454];
-
-      targetIndices.forEach((idx) => {
-        if (Math.random() < 0.75) {
-          const pt = landmarks[idx];
-          const px = pt.x * w;
-          const py = pt.y * h;
-
-          // Случайные размеры цифрового блока
-          const boxW = Math.floor(Math.random() * 90) + 30;
-          const boxH = Math.floor(Math.random() * 60) + 20;
-          const jitterX = (Math.random() - 0.5) * 30;
-          const jitterY = (Math.random() - 0.5) * 30;
-
-          // Заливка фиолетовым/пурпурным блоком
-          ctx.fillStyle = GLITCH_COLORS[Math.floor(Math.random() * GLITCH_COLORS.length)];
-          ctx.fillRect(px - boxW / 2 + jitterX, py - boxH / 2 + jitterY, boxW, boxH);
-
-          // Контурная белая обводка (стилистика сжатия в видео)
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = Math.random() < 0.5 ? 1 : 2;
-          ctx.strokeRect(px - boxW / 2 + jitterX, py - boxH / 2 + jitterY, boxW, boxH);
-        }
-      });
-    }
-
-    /**
-     * Отрисовка полигональной сетки лица в стиле кибер-контуров
-     */
-    function drawMeshContours(ctx, landmarks, w, h) {
-      // Контур овала лица и глаз
-      const ovalPoints = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
-
-      ctx.beginPath();
-      ovalPoints.forEach((id, i) => {
-        const x = landmarks[id].x * w + (Math.random() - 0.5) * 3;
-        const y = landmarks[id].y * h + (Math.random() - 0.5) * 3;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.closePath();
-
-      ctx.strokeStyle = Math.random() < 0.3 ? '#ffffff' : '#d946ef';
+      // 2. Тонкая белая рамка
+      ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.5;
-      ctx.stroke();
-    }
+      ctx.strokeRect(x, y, w, h);
 
-    /**
-     * Отрисовка горизонтальных кинескопных линий (Scanlines)
-     */
-    function drawScanlines(ctx, w, h) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-      for (let y = 0; y < h; y += 4) {
-        ctx.fillRect(0, y, w, 1.5);
+      // 3. Внутренний дополнительный прямоугольник (эффект макроблока сжатия)
+      if (w > 40 && Math.random() < 0.4) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.strokeRect(x + 4, y + 4, w - 8, h - 8);
       }
     }
 
-    /* =============================================================
-       7. ГЛАВНЫЙ ОБРАБОТЧИК КАДРА
-       ============================================================= */
-    function onResults(results) {
-      frameCount++;
+    /* -------------------------------------------------------------
+       4. ОСНОВНОЙ ЦИКЛ РЕНДЕРИНГА (BLUR, COLORING, GLITCH)
+       ------------------------------------------------------------- */
+    function renderLoop() {
       const w = canvas.width;
       const h = canvas.height;
 
-      // 1. Рисуем прямой видеопоток (без зеркалирования для задней камеры)
-      ctx.drawImage(results.image, 0, 0, w, h);
+      if (video.readyState >= 2) {
+        // --- ЭФФЕКТ MOTION BLUR / ШЛЕЙФА (GHOSTING) ---
+        // Рисуем текущий кадр с лёгкой прозрачностью поверх предыдущего
+        ctx.globalAlpha = 0.72; // Чем меньше число, тем сильнее блюр и шлейф
+        ctx.drawImage(video, 0, 0, w, h);
+        ctx.globalAlpha = 1.0;
 
-      // 2. Если лицо обнаружено — генерируем glitchcore-наложение
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        for (const landmarks of results.multiFaceLandmarks) {
-          drawMeshContours(ctx, landmarks, w, h);
-          drawGlitchBoxes(ctx, landmarks, w, h);
+        // --- ФИОЛЕТОВОЕ ОКРАШИВАНИЕ (COLOR TINT / THRESHOLD) ---
+        // Накладываем глубокий пурпурно-фиолетовый слой в режиме наложения
+        ctx.save();
+        ctx.globalCompositeOperation = 'color';
+        ctx.fillStyle = 'rgba(162, 28, 210, 0.45)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.restore();
+
+        // Дополнительный контрастный фиолетовый слой на темные зоны
+        if (Math.random() < 0.3) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'exclusion';
+          ctx.fillStyle = 'rgba(75, 0, 130, 0.25)';
+          ctx.fillRect(0, 0, w, h);
+          ctx.restore();
+        }
+
+        // --- 1. ТРЕКИНГ КВАДРАТИКОВ НА ЛИЦЕ (ЕСЛИ ОНО В КАДРЕ) ---
+        if (currentLandmarks) {
+          for (const face of currentLandmarks) {
+            // Ключевые точки: глаза (33, 263), рот (13), нос (4), лоб (10), щеки (234, 454)
+            const pts = [33, 263, 13, 4, 10, 234, 454, 152];
+            pts.forEach((idx) => {
+              if (Math.random() < 0.8) {
+                const pt = face[idx];
+                const bx = pt.x * w - 35 + (Math.random() - 0.5) * 40;
+                const by = pt.y * h - 45 + (Math.random() - 0.5) * 40;
+                const bw = Math.floor(Math.random() * 90) + 40;
+                const bh = Math.floor(Math.random() * 110) + 50;
+
+                drawGlitchBox(bx, by, bw, bh, 'rgba(192, 38, 211, 0.88)');
+              }
+            });
+          }
+        }
+
+        // --- 2. АВТОНОМНЫЕ ФИОЛЕТОВЫЕ БЛОКИ (КАК В ВИДЕО ПО ВСЕМУ ЭКРАНУ) ---
+        persistentBoxes.forEach((b) => {
+          b.life--;
+          if (b.life <= 0) {
+            b.x = Math.random();
+            b.y = Math.random();
+            b.w = Math.random() * 0.28 + 0.04;
+            b.h = Math.random() * 0.38 + 0.06;
+            b.life = Math.floor(Math.random() * 15) + 5;
+          }
+
+          if (Math.random() < 0.85) {
+            drawGlitchBox(b.x * w, b.y * h, b.w * w, b.h * h, b.color);
+          }
+        });
+
+        // --- 3. СРЕЗЫ И ДАТАМОШИНГ (СДВИГ ПИКСЕЛЕЙ) ---
+        if (Math.random() < 0.5) {
+          const sliceH = Math.floor(Math.random() * 60) + 15;
+          const sliceY = Math.floor(Math.random() * (h - sliceH));
+          const offset = (Math.random() - 0.5) * 60;
+          ctx.drawImage(canvas, 0, sliceY, w, sliceH, offset, sliceY, w, sliceH);
+        }
+
+        // --- 4. МЕЛКИЙ ЦИФРОВОЙ ШУМ И ПИКСЕЛИ ---
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < 12; i++) {
+          const sx = Math.random() * w;
+          const sy = Math.random() * h;
+          ctx.fillRect(sx, sy, Math.random() * 8 + 2, Math.random() * 4 + 2);
         }
       }
 
-      // 3. Добавляем горизонтальные артефакты датамошинга
-      applyDatamoshSlices(ctx, w, h);
-
-      // 4. Накладываем аналоговые сканлайны
-      drawScanlines(ctx, w, h);
-
-      // 5. Текстовый HUD-индикатор времени кадра
-      if (frameCount % 6 === 0) {
-        hud.innerText = `SYS.EXEC // NOISE_MOD [${(Math.random() * 9999).toFixed(0)}] // FACE_SYNC`;
-      }
+      requestAnimationFrame(renderLoop);
     }
 
-    // Старт работы
-    window.addEventListener('DOMContentLoaded', initCamera);
+    // Старт
+    window.addEventListener('DOMContentLoaded', startCamera);
   </script>
 </body>
 </html>
